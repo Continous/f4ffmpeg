@@ -5,7 +5,7 @@ includes("lib/commonlibf4")
 add_requires("ffmpeg")
 
 -- set project constants
-set_project("commonlibf4-template")
+set_project("f4ffmpeg")
 set_version("0.0.0")
 set_license("GPL-3.0")
 set_languages("c++23")
@@ -16,11 +16,11 @@ add_rules("mode.debug", "mode.releasedbg")
 add_rules("plugin.vsxmake.autoupdate")
 
 -- define targets
-target("commonlibf4-template")
-    add_rules("commonlibf4.plugin", {
-        name = "commonlibf4-template",
-        author = "libxse",
-        description = "F4SE plugin template using CommonLibF4"
+target("f4ffmpeg")
+    add_rules("f4ffmpeg.plugin", {
+        name = "f4ffmpeg",
+        author = "Continous",
+        description = "This is a simple plugin intended to provide FFMPEG."
     })
 
     -- add src files
