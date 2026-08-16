@@ -1,4 +1,5 @@
 #include "decoder.h"
+#include <algorithm>
 
 extern "C"
 {
@@ -18,6 +19,11 @@ bool decoder::hasHardwareDecoder() const
 const std::vector<hardwareCodec>& decoder::getHardwareCodecs() const
 {
     return hardwareCodecs;
+}
+
+const std::vector<preferredCodec>& decoder::getPreferredCodecs() const
+{
+    return preferredCodecs;
 }
 
 void decoder::testHardwareDevices()
@@ -91,6 +97,8 @@ void decoder::testHardwareDevices()
     {
         hardwareDecoder = false;
     }
+
+    buildPreferredCodecs();
 }
         decoder::~decoder()
         {
@@ -133,6 +141,37 @@ void decoder::testHardwareDevices()
         if (formatContext != nullptr)
         {
             avformat_close_input(&formatContext);
+        }
+    }
+    void decoder::buildPreferredCodecs()
+    {
+        preferredCodecs.clear();
+
+        for (const auto& hardwareCodec : hardwareCodecs)
+        {
+            auto existing = std::find_if(
+                preferredCodecs.begin(),
+                preferredCodecs.end(),
+                [&](const preferredCodec& item)
+                {
+                    return item.codec == hardwareCodec.codec;
+                }
+            );
+
+            if (existing == preferredCodecs.end())
+            {
+                preferredCodecs.push_back({
+                    hardwareCodec.codec,
+                    hardwareCodec.backend
+                });
+
+                continue;
+            }
+
+            if (hardwareCodec.backend == AV_HWDEVICE_TYPE_D3D11VA)
+            {
+                existing->backend = AV_HWDEVICE_TYPE_D3D11VA;
+            }
         }
     }
 }

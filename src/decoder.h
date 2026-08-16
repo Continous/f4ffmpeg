@@ -28,11 +28,16 @@ namespace f4ffmpeg
 
         bool hasHardwareDecoder() const; //If there is a hardware decoder.
         const std::vector<hardwareCodec>& getHardwareCodecs() const;
+        const std::vector<preferredCodec>& getPreferredCodecs() const;
 
     private:
+        void buildPreferredCodecs();
+
         AVFormatContext* formatContext = nullptr;
 
         bool hardwareDecoder = false;
+
         std::vector<hardwareCodec> hardwareCodecs;
+        std::vector<preferredCodec> preferredCodecs;
     };
 }

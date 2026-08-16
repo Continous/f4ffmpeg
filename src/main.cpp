@@ -7,6 +7,15 @@ extern "C"
 }
 
 #include "decoder.h"
+#include "api.h"
+
+
+extern "C"
+__declspec(dllexport)
+f4ffmpeg::api* f4ffmpegGetApi()
+{
+	return f4ffmpeg::getApi();
+}
 
 F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
 {
@@ -27,8 +36,9 @@ F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
 					hardwareCodec.backend,
 					hardwareCodec.codec
 			);
-			REX::INFO("D3D11va is preferred, other backends may experience performance degradation.")
+			REX::INFO("D3D11va is preferred, other backends may experience performance degradation.");
 		}
+
 	}
 	else
 	{
@@ -44,14 +54,12 @@ F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
         REX::ERROR("Failed to open main menu video. FFMPEG is presumed non-functional.");
     }
 
-	extern "C"
-	__declspec(dllexport)
-	f4ffmpeg::api* f4ffmpegGetApi()
+	for (const auto& preferredCodec : testDecoder.getPreferredCodecs())
 	{
-		return f4ffmpeg::getApi();
-		REX::INFO("f4ffmpeg api loaded, with version {}",
-				apiVersion);
+		REX::INFO("Preferred codecs:");
+		REX::INFO("Backend: {} Codec: {}", preferredCodec.backend, preferredCodec.codec);
 	}
-
+		REX::INFO("f4ffmpeg api initialized, with version {}",
+			f4ffmpeg::apiVersion);
     return true;
 }

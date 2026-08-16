@@ -16,6 +16,27 @@ namespace f4ffmpeg
 
         virtual decoder* createDecoder() = 0;
         virtual void destroyDecoder(decoder* decoderInstance) = 0;
+
+        virtual bool open(
+            decoder* decoderInstance,
+            const char* path
+        ) = 0;
+
+        virtual void close(
+            decoder* decoderInstance
+        ) = 0;
+
+        virtual void testHardwareDevices(
+            decoder* decoderInstance
+        ) = 0;
+
+        virtual bool hasHardwareDecoder(
+            decoder* decoderInstance
+        ) const = 0;
+
+        virtual const std::vector<preferredCodec>& getPreferredCodecs(
+            decoder* decoderInstance
+        ) const = 0;
     };
 
     api* getApi();
