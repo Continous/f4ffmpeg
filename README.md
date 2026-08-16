@@ -1,6 +1,6 @@
 # CommonLibF4 Plugin Template
 
-This is a basic plugin template using CommonLibF4.
+This plugin is based on the CommonLibF4 plugin template.
 
 ### Requirements
 * [XMake](https://xmake.io) [3.0.0+]
