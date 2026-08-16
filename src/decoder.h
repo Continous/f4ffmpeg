@@ -15,8 +15,7 @@ namespace f4ffmpeg
 
         bool open(const char* path);
         void close();
-
-        bool supportsHardwareDecode(AVHWDeviceType deviceType);
+        void testHardwareDevices();
 
     private:
         AVFormatContext* formatContext = nullptr;
