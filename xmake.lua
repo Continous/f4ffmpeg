@@ -1,11 +1,8 @@
 -- include subprojects
 includes("lib/commonlibf4")
 
--- include ffmpeg requirements
-add_requires("ffmpeg")
-
 -- set project constants
-set_project("f4ffmpeg")
+set_project("commonlibf4-template")
 set_version("0.0.0")
 set_license("GPL-3.0")
 set_languages("c++23")
@@ -16,11 +13,11 @@ add_rules("mode.debug", "mode.releasedbg")
 add_rules("plugin.vsxmake.autoupdate")
 
 -- define targets
-target("f4ffmpeg")
+target("commonlibf4-template")
     add_rules("commonlibf4.plugin", {
-        name = "f4ffmpeg",
-        author = "Continous",
-        description = "A Fallout F4SE project to provide FFMPEG via plugin."
+        name = "commonlibf4-template",
+        author = "libxse",
+        description = "F4SE plugin template using CommonLibF4"
     })
 
     -- add src files
@@ -28,5 +25,3 @@ target("f4ffmpeg")
     add_headerfiles("src/**.h")
     add_includedirs("src")
     set_pcxxheader("src/pch.h")
-    -- add ffmpeg
-    add_packages("ffmpeg")
