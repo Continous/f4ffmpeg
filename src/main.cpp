@@ -54,9 +54,10 @@ F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
         REX::ERROR("Failed to open main menu video. FFMPEG is presumed non-functional.");
     }
 
+	REX::INFO("Preferred codecs:");
+
 	for (const auto& preferredCodec : testDecoder.getPreferredCodecs())
 	{
-		REX::INFO("Preferred codecs:");
 		REX::INFO("Backend: {} Codec: {}", preferredCodec.backend, preferredCodec.codec);
 	}
 		REX::INFO("f4ffmpeg api initialized, with version {}",

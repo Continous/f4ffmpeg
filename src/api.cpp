@@ -65,11 +65,11 @@ namespace f4ffmpeg
             return decoderInstance->hasHardwareDecoder();
         }
 
-        const std::vector<hardwareCodec>& getPreferredCodecs(
+        const std::vector<preferredCodec>& getPreferredCodecs(
             decoder* decoderInstance
         ) const override
         {
-            return decoderInstance->getHardwareCodecs();
+            return decoderInstance->getPreferredCodecs();
         }
     };
 

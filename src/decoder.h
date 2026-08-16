@@ -16,6 +16,12 @@ namespace f4ffmpeg
         std::string backend;
         std::string codec;
     };
+        struct preferredCodec //Construct hardwareCodec to show both backend and codec.
+    {
+        std::string backend;
+        std::string codec;
+    };
+
 
     class decoder
     {

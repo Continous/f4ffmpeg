@@ -161,16 +161,16 @@ void decoder::testHardwareDevices()
             if (existing == preferredCodecs.end())
             {
                 preferredCodecs.push_back({
-                    hardwareCodec.codec,
-                    hardwareCodec.backend
+                    hardwareCodec.backend,
+                    hardwareCodec.codec
                 });
 
                 continue;
             }
 
-            if (hardwareCodec.backend == AV_HWDEVICE_TYPE_D3D11VA)
+            if (hardwareCodec.backend == "d3d11va")
             {
-                existing->backend = AV_HWDEVICE_TYPE_D3D11VA;
+                existing->backend = "d3d11va";
             }
         }
     }
