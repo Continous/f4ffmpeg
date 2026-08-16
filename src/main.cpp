@@ -18,11 +18,11 @@ F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
 
     if (testDecoder.open("Data/Video/MainMenuLoop.bk2"))
     {
-        REX::INFO("Successfully opened intro video.");
+        REX::INFO("Successfully opened main menu video.");
     }
     else
     {
-        REX::ERROR("Failed to open intro video. FFMPEG is presumed non-functional.");
+        REX::ERROR("Failed to open main menu video. FFMPEG is presumed non-functional.");
     }
 
     return true;
