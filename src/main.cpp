@@ -36,7 +36,6 @@ F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
 					hardwareCodec.backend,
 					hardwareCodec.codec
 			);
-			REX::INFO("D3D11va is preferred, other backends may experience performance degradation.");
 		}
 
 	}
@@ -54,6 +53,7 @@ F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
         REX::ERROR("Failed to open main menu video. FFMPEG is presumed non-functional.");
     }
 
+	REX::INFO("D3D11va is preferred, other backends may experience performance degradation.");
 	REX::INFO("Preferred codecs:");
 
 	for (const auto& preferredCodec : testDecoder.getPreferredCodecs())
