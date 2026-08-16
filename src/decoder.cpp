@@ -3,48 +3,88 @@
 namespace f4ffmpeg
 {
 
-    void decoder::testHardwareDevices()
+void decoder::testHardwareDevices()
+{
+    AVHWDeviceType type = AV_HWDEVICE_TYPE_NONE;
+    bool foundDeviceType = false;
+
+    while ((type = av_hwdevice_iterate_types(type)) != AV_HWDEVICE_TYPE_NONE)
     {
-        AVHWDeviceType type = AV_HWDEVICE_TYPE_NONE;
+        foundDeviceType = true;
 
-        while ((type = av_hwdevice_iterate_types(type)) != AV_HWDEVICE_TYPE_NONE)
+        const char* deviceName = av_hwdevice_get_type_name(type);
+
+        REX::INFO(
+            "FFmpeg hardware backend reported available: {}",
+            deviceName ? deviceName : "unknown"
+        );
+
+        AVBufferRef* deviceContext = nullptr;
+
+        int result = av_hwdevice_ctx_create(
+            &deviceContext,
+            type,
+            nullptr,
+            nullptr,
+            0
+        );
+
+        if (result < 0)
         {
-            const char* name = av_hwdevice_get_type_name(type);
-
             REX::INFO(
-                "FFmpeg hardware backend reported available: {}",
-                name ? name : "unknown"
+                "Hardware backend '{}' is advertised, but could not be initialized.",
+                deviceName ? deviceName : "unknown"
             );
 
-            AVBufferRef* deviceContext = nullptr;
+            continue;
+        }
 
-            int result = av_hwdevice_ctx_create(
-                &deviceContext,
-                type,
-                nullptr,
-                nullptr,
-                0
-            );
+        REX::INFO(
+            "Hardware backend '{}' initialized successfully.",
+            deviceName ? deviceName : "unknown"
+        );
 
-            if (result >= 0)
+        // Capability scan
+        void* iterator = nullptr;
+        const AVCodec* codec = nullptr;
+
+        while ((codec = av_codec_iterate(&iterator)) != nullptr)
+        {
+            if (!av_codec_is_decoder(codec))
             {
-                REX::INFO(
-                    "Successfully initialized hardware backend: {}",
-                    name ? name : "unknown"
-                );
-
-                av_buffer_unref(&deviceContext);
+                continue;
             }
-            else
+
+            for (int i = 0;; i++)
             {
-                REX::INFO(
-                    "Hardware backend could not be initialized: {}",
-                    name ? name : "unknown"
-                );
+                const AVCodecHWConfig* config =
+                    avcodec_get_hw_config(codec, i);
+
+                if (config == nullptr)
+                {
+                    break;
+                }
+
+                if (config->device_type == type)
+                {
+                    REX::INFO(
+                        "Hardware decoder found: {}",
+                        codec->name
+                    );
+
+                    break;
+                }
             }
         }
+
+        av_buffer_unref(&deviceContext);
     }
 
+    if (!foundDeviceType)
+    {
+        REX::INFO("FFmpeg reports no hardware device backends.");
+    }
+}
         decoder::~decoder()
         {
             close();
