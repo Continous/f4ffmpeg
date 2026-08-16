@@ -8,6 +8,7 @@ extern "C"
 
 #include "decoder.h"
 #include "api.h"
+#include "graphics.h"
 
 
 extern "C"
@@ -21,31 +22,28 @@ F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
 {
     F4SE::Init(a_f4se);
 
-	//Check Address Library pointer
-	REL::Relocation<std::uintptr_t> d3d11DeviceLocation{
-	REL::ID(633829)
-	};
-
-	REX::INFO(
-		"D3D11 device relocation resolved to 0x{:X}",
-		d3d11DeviceLocation.address()
-	);
-
-	auto deviceValue =
-		*reinterpret_cast<std::uintptr_t*>(
-			d3d11DeviceLocation.address()
-		);
-
-	REX::INFO(
-		"D3D11 device relocation contains 0x{:X}",
-		deviceValue
-	);
-
-
     REX::INFO("Hello World! I am the (F)allout (4) (FFMPEG) plugin.");
     REX::INFO("FFmpeg version: {}", av_version_info());
 
-    f4ffmpeg::decoder testDecoder;
+	if (!f4ffmpeg::initializeGraphics())
+	{
+		REX::ERROR("Failed to initialize graphics.");
+		return false;
+	}
+
+	REX::INFO(
+		"Graphics initialized. Device: 0x{:X}, Context: 0x{:X}",
+		reinterpret_cast<std::uintptr_t>(
+			f4ffmpeg::getD3D11Device()
+		),
+		reinterpret_cast<std::uintptr_t>(
+			f4ffmpeg::getD3D11DeviceContext()
+		)
+	);
+    return false;
+	}
+
+	f4ffmpeg::decoder testDecoder;
 
 	testDecoder.testHardwareDevices();
 	if (testDecoder.hasHardwareDecoder())
