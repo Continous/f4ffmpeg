@@ -5,6 +5,7 @@ This is a simple plugin intended to provide FFMPEG.
 ### Requirements
 * [XMake](https://xmake.io) [3.0.0+]
 * C++23 Compiler (MSVC or Clang-CL)
+* Presumably whatever FFMPEG requires.
 
 ## Credit
 

@@ -2,6 +2,11 @@
 
 namespace f4ffmpeg
 {
+
+        decoder::~decoder()
+        {
+            close();
+        }
         bool decoder::open(const char* path)
     {
         if (formatContext != nullptr)
@@ -41,5 +46,13 @@ namespace f4ffmpeg
         );
 
         return true;
+    }
+
+        void decoder::close()
+    {
+        if (formatContext != nullptr)
+        {
+            avformat_close_input(&formatContext);
+        }
     }
 }

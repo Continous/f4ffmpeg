@@ -6,10 +6,13 @@ extern "C"
 }
 
 namespace f4ffmpeg
+
 {
     class decoder
     {
     public:
+        ~decoder();
+
         bool open(const char* path);
         void close();
 
