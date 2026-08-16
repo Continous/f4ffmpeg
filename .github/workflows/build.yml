@@ -39,3 +39,12 @@ jobs:
 
       - name: build
         run: xmake build -y -vD
+
+      - name: upload
+        uses: actions/upload-artifact@v7
+        with:
+            name: f4ffmpeg
+            path: |
+              build/**/*.dll
+              build/**/*.pdb
+            if-no-files-found: error
