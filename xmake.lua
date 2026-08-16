@@ -17,7 +17,7 @@ add_rules("plugin.vsxmake.autoupdate")
 
 -- define targets
 target("f4ffmpeg")
-    add_rules("f4ffmpeg.plugin", {
+    add_rules("commonlibf4.plugin", {
         name = "f4ffmpeg",
         author = "Continous",
         description = "This is a simple plugin intended to provide FFMPEG."
