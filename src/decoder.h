@@ -6,6 +6,7 @@
 extern "C"
 {
 #include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
 }
 
 namespace f4ffmpeg
@@ -32,6 +33,10 @@ namespace f4ffmpeg
         void close();
         void testHardwareDevices();
 
+
+        bool initializeVideoDecoder(); //Where the cake gets baked.
+        bool decodeTestFrame(); //Where we check that we're actually baking cake
+
         bool hasHardwareDecoder() const; //If there is a hardware decoder.
         const std::vector<hardwareCodec>& getHardwareCodecs() const;
         const std::vector<preferredCodec>& getPreferredCodecs() const;
@@ -45,5 +50,10 @@ namespace f4ffmpeg
 
         std::vector<hardwareCodec> hardwareCodecs;
         std::vector<preferredCodec> preferredCodecs;
+
+        AVCodecContext* codecContext = nullptr;
+        const AVCodec* videoCodec = nullptr;
+
+        int videoStreamIndex = -1;
     };
 }

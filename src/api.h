@@ -25,18 +25,6 @@ namespace f4ffmpeg
         virtual void close(
             decoder* decoderInstance
         ) = 0;
-
-        virtual void testHardwareDevices(
-            decoder* decoderInstance
-        ) = 0;
-
-        virtual bool hasHardwareDecoder(
-            decoder* decoderInstance
-        ) const = 0;
-
-        virtual const std::vector<preferredCodec>& getPreferredCodecs(
-            decoder* decoderInstance
-        ) const = 0;
     };
 
     api* getApi();

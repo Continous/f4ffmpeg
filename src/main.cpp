@@ -53,6 +53,26 @@ F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
         REX::ERROR("Failed to open main menu video. FFMPEG is presumed non-functional.");
     }
 
+    //Debug video frame test.
+    if (testDecoder.open("Data/Video/f4ffmpeg/test.mp4"))
+	{
+		REX::INFO("Test media opened.");
+
+		if (testDecoder.initializeVideoDecoder())
+		{
+			REX::INFO("Video decoder initialized.");
+
+			if (testDecoder.decodeTestFrame())
+			{
+				REX::INFO("Successfully decoded a video frame.");
+			}
+			else
+			{
+				REX::ERROR("Failed to decode a video frame.");
+			}
+		}
+	}
+
 	REX::INFO("D3D11va is preferred, other backends may experience performance degradation.");
 	REX::INFO("Preferred codecs:");
 

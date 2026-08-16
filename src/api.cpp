@@ -42,35 +42,6 @@ namespace f4ffmpeg
                 decoderInstance->close();
             }
         }
-
-        void testHardwareDevices(
-            decoder* decoderInstance
-        ) override
-        {
-            if (decoderInstance != nullptr)
-            {
-                decoderInstance->testHardwareDevices();
-            }
-        }
-
-        bool hasHardwareDecoder(
-            decoder* decoderInstance
-        ) const override
-        {
-            if (decoderInstance == nullptr)
-            {
-                return false;
-            }
-
-            return decoderInstance->hasHardwareDecoder();
-        }
-
-        const std::vector<preferredCodec>& getPreferredCodecs(
-            decoder* decoderInstance
-        ) const override
-        {
-            return decoderInstance->getPreferredCodecs();
-        }
     };
 
     api* getApi()

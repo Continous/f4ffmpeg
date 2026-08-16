@@ -26,6 +26,91 @@ const std::vector<preferredCodec>& decoder::getPreferredCodecs() const
     return preferredCodecs;
 }
 
+bool decoder::initializeVideoDecoder()
+{
+    videoStreamIndex = av_find_best_stream(
+        formatContext,
+        AVMEDIA_TYPE_VIDEO,
+        -1,
+        -1,
+        &videoCodec,
+        0
+    );
+
+    if (videoStreamIndex < 0)
+    {
+        return false;
+    }
+
+    codecContext = avcodec_alloc_context3(videoCodec);
+
+    if (codecContext == nullptr)
+    {
+        return false;
+    }
+
+    AVStream* videoStream =
+        formatContext->streams[videoStreamIndex];
+
+    if (avcodec_parameters_to_context(
+            codecContext,
+            videoStream->codecpar) < 0)
+    {
+        return false;
+    }
+
+    if (avcodec_open2(
+            codecContext,
+            videoCodec,
+            nullptr) < 0)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool decoder::decodeTestFrame()
+{
+    AVPacket* packet = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+
+    if (packet == nullptr || frame == nullptr)
+    {
+        av_packet_free(&packet);
+        av_frame_free(&frame);
+        return false;
+    }
+
+    bool frameDecoded = false;
+
+    while (av_read_frame(formatContext, packet) >= 0)
+    {
+        if (packet->stream_index == videoStreamIndex)
+        {
+            if (avcodec_send_packet(codecContext, packet) >= 0)
+            {
+                int result =
+                    avcodec_receive_frame(codecContext, frame);
+
+                if (result >= 0)
+                {
+                    frameDecoded = true;
+                    av_packet_unref(packet);
+                    break;
+                }
+            }
+        }
+
+        av_packet_unref(packet);
+    }
+
+    av_packet_free(&packet);
+    av_frame_free(&frame);
+
+    return frameDecoded;
+}
+
 void decoder::testHardwareDevices()
 {
     hardwareDecoder = false;
@@ -138,10 +223,16 @@ void decoder::testHardwareDevices()
 
         void decoder::close()
     {
+        if (codecContext != nullptr)
+        {
+            avcodec_free_context(&codecContext);
+        }
         if (formatContext != nullptr)
         {
             avformat_close_input(&formatContext);
         }
+        videoCodec = nullptr;
+        videoStreamIndex = -1;
     }
     void decoder::buildPreferredCodecs()
     {
