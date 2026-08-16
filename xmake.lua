@@ -1,6 +1,9 @@
 -- include subprojects
 includes("lib/commonlibf4")
 
+-- FFMPEG is required
+add_requires("ffmpeg")
+
 -- set project constants
 set_project("commonlibf4-template")
 set_version("0.0.0")
@@ -25,3 +28,5 @@ target("commonlibf4-template")
     add_headerfiles("src/**.h")
     add_includedirs("src")
     set_pcxxheader("src/pch.h")
+    -- Use FFMPEG
+    add_packages("ffmpeg")
