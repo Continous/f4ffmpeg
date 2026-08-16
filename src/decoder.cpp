@@ -3,6 +3,48 @@
 namespace f4ffmpeg
 {
 
+    void decoder::testHardwareDevices()
+    {
+        AVHWDeviceType type = AV_HWDEVICE_TYPE_NONE;
+
+        while ((type = av_hwdevice_iterate_types(type)) != AV_HWDEVICE_TYPE_NONE)
+        {
+            const char* name = av_hwdevice_get_type_name(type);
+
+            REX::INFO(
+                "FFmpeg hardware backend reported available: {}",
+                name ? name : "unknown"
+            );
+
+            AVBufferRef* deviceContext = nullptr;
+
+            int result = av_hwdevice_ctx_create(
+                &deviceContext,
+                type,
+                nullptr,
+                nullptr,
+                0
+            );
+
+            if (result >= 0)
+            {
+                REX::INFO(
+                    "Successfully initialized hardware backend: {}",
+                    name ? name : "unknown"
+                );
+
+                av_buffer_unref(&deviceContext);
+            }
+            else
+            {
+                REX::INFO(
+                    "Hardware backend could not be initialized: {}",
+                    name ? name : "unknown"
+                );
+            }
+        }
+    }
+
         decoder::~decoder()
         {
             close();
