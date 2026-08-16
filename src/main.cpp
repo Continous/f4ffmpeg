@@ -17,6 +17,23 @@ F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
 
     f4ffmpeg::decoder testDecoder;
 
+	testDecoder.testHardwareDevices();
+	if (testDecoder.hasHardwareDecoder())
+	{
+		REX::INFO("Hardware decoding is available.");
+		for (const auto& hardwareCodec : testDecoder.getHardwareCodecs())
+		{
+			REX::INFO("Hardware decoder: Backend: {}, Codec: {}",
+					hardwareCodec.backend,
+					hardwareCodec.codec
+			);
+		}
+	}
+	else
+	{
+		REX::INFO("No hardware decoding available.");
+	}
+
     if (testDecoder.open("Data/Video/MainMenuLoop.bk2"))
     {
         REX::INFO("Successfully opened main menu video.");

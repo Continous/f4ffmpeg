@@ -1,10 +1,30 @@
 #include "decoder.h"
 
+extern "C"
+{
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/hwcontext.h>
+}
+
 namespace f4ffmpeg
 {
 
+bool decoder::hasHardwareDecoder() const
+{
+    return hardwareDecoder;
+}
+
+const std::vector<hardwareCodec>& decoder::getHardwareCodecs() const
+{
+    return hardwareCodecs;
+}
+
 void decoder::testHardwareDevices()
 {
+    hardwareDecoder = false;
+    hardwareCodecs.clear(); //Clear the test so we get new results each time and no duplicates.
+
     AVHWDeviceType type = AV_HWDEVICE_TYPE_NONE;
     bool foundDeviceType = false;
 
@@ -14,10 +34,6 @@ void decoder::testHardwareDevices()
 
         const char* deviceName = av_hwdevice_get_type_name(type);
 
-        REX::INFO(
-            "FFmpeg hardware backend reported available: {}",
-            deviceName ? deviceName : "unknown"
-        );
 
         AVBufferRef* deviceContext = nullptr;
 
@@ -31,18 +47,8 @@ void decoder::testHardwareDevices()
 
         if (result < 0)
         {
-            REX::INFO(
-                "Hardware backend '{}' is advertised, but could not be initialized.",
-                deviceName ? deviceName : "unknown"
-            );
-
             continue;
         }
-
-        REX::INFO(
-            "Hardware backend '{}' initialized successfully.",
-            deviceName ? deviceName : "unknown"
-        );
 
         // Capability scan
         void* iterator = nullptr;
@@ -67,11 +73,12 @@ void decoder::testHardwareDevices()
 
                 if (config->device_type == type)
                 {
-                    REX::INFO(
-                        "Hardware decoder found: {}",
-                        codec->name
-                    );
+                    hardwareDecoder = true;
 
+                    hardwareCodecs.push_back({
+                        deviceName,
+                        codec->name
+                    });
                     break;
                 }
             }
@@ -82,7 +89,7 @@ void decoder::testHardwareDevices()
 
     if (!foundDeviceType)
     {
-        REX::INFO("FFmpeg reports no hardware device backends.");
+        hardwareDecoder = false;
     }
 }
         decoder::~decoder()
@@ -94,9 +101,8 @@ void decoder::testHardwareDevices()
         if (formatContext != nullptr)
         {
             close();
-        } //If there is not formatContext provided we can just close out. There's presumably no media being provided.
+        } //If there is a formatContext we need to close it first.
 
-        REX::INFO("Attempting to open media: {}", path);
 
         if (avformat_open_input(
                 &formatContext,
@@ -104,9 +110,7 @@ void decoder::testHardwareDevices()
                 nullptr,
                 nullptr) < 0)
         {
-            formatContext = nullptr; //Release formatContext, we failed to open.
-
-            REX::ERROR("FFmpeg failed to open media: {}", path);
+            formatContext = nullptr; //Release formatContext, we failed to open. Maybe have a failure flag?
 
             return false;
         }
@@ -115,17 +119,11 @@ void decoder::testHardwareDevices()
                 formatContext,
                 nullptr) < 0)
         {
-            REX::ERROR("FFmpeg failed to read stream information: {}", path);
-
             close();
 
             return false;
         }
 
-        REX::INFO(
-            "FFmpeg opened media successfully. Stream count: {}",
-            formatContext->nb_streams
-        );
 
         return true;
     }
