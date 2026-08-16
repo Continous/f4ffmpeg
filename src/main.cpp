@@ -90,7 +90,7 @@ F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
 		}
 	}
 
-	REX::INFO("D3D11va is preferred, other backends may experience performance degradation.");
+	REX::INFO("D3D11va is preferred, other backends may experience performance degradation. Any missing codec issues are not to be considered bugs, but rather client-side issues.");
 	REX::INFO("Preferred codecs:");
 
 	for (const auto& preferredCodec : testDecoder.getPreferredCodecs())
