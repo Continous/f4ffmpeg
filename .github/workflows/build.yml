@@ -18,7 +18,6 @@ jobs:
       fail-fast: false
       matrix:
         mode:
-          - debug
           - releasedbg
         toolchain:
           - msvc

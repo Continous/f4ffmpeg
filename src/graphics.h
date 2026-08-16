@@ -4,7 +4,7 @@ namespace REX::W32
 {
     struct ID3D11Device;
     struct ID3D11DeviceContext;
-}
+} // Both of these provided by CommonLibF4
 
 namespace f4ffmpeg
 {
