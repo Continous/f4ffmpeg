@@ -149,11 +149,12 @@ namespace Main
 			"Data/Video/f4ffmpeg/test.mp4",
 			"Data/Video/f4ffmpeg/testDecode.bmp"
 		);
-
 		if (testManager)
 		{
+			testManager->setLooping(true);
+
 			REX::INFO(
-				"Test manager started successfully."
+				"Test manager started successfully with looping enabled."
 			);
 		}
 		else

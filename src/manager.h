@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <memory>
+#include <string>
 #include <thread>
 
 #include "decoderWorker.h"
@@ -21,11 +22,19 @@ namespace f4ffmpeg
 
         void stop();
 
+        void manager::setLooping(bool enabled)
+        {
+            looping = enabled;
+        }
+
     private:
         void run();
 
         decodeWorker decoderWorker;
         producerWorker producerWorker;
+
+        std::string inputPath;
+        bool looping = false;
 
         std::thread managerThread;
 

@@ -30,6 +30,13 @@ bool manager::start(
         return false;
     }
 
+    if (inputPath == nullptr)
+    {
+        return false;
+    }
+
+    this->inputPath = inputPath;
+
     lastSubmittedFrame = nullptr;
 
     stopRequested = false;
@@ -54,6 +61,50 @@ void manager::run()
             producerWorker.submitFrame(frame);
 
             lastSubmittedFrame = frame;
+        }
+
+        if (!decoderWorker.isRunning())
+        {
+            const auto result =
+                decoderWorker.getLastResult();
+
+            switch (result.status)
+            {
+                case decodeStatus::endOfFile:
+                    if (looping)
+                    {
+                        lastSubmittedFrame = nullptr;
+
+                        if (decoderWorker.start(
+                                inputPath.c_str()))
+                        {
+                            REX::INFO(
+                                "Manager sent loop request."
+                            );
+                        }
+                        else
+                        {
+                            REX::ERROR(
+                                "Manager reported failed loop request."
+                            );
+
+                            stopRequested = true;
+                        }
+                    }
+
+                    break;
+
+            case decodeStatus::ffmpegError:
+                stopRequested = true;
+                break;
+
+            case decodeStatus::stopped:
+                stopRequested = true;
+                break;
+
+            case decodeStatus::frameReady:
+                break;
+            }
         }
 
         std::this_thread::sleep_for(
