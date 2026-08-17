@@ -25,21 +25,24 @@ namespace f4ffmpeg
         std::shared_ptr<const decodedFrame>
         getLatestFrame() const;
 
-    private:
-        void run();
+        bool isRunning() const;
+        decodeResult getLastResult() const;
 
-        decoder workerDecoder;
-        std::thread workerThread;
+        private:
+            void run();
 
-        std::atomic<bool> stopRequested = false;
-        std::atomic<bool> running = false;
+            decoder workerDecoder;
+            std::thread workerThread;
 
-        std::atomic<std::shared_ptr<const decodedFrame>>
-            latestFrame;
+            std::atomic<bool> stopRequested = false;
+            std::atomic<bool> running = false;
 
-        decodeResult lastResult{
-            decodeStatus::stopped,
-            0
+            std::atomic<std::shared_ptr<const decodedFrame>>
+                latestFrame;
+
+            std::atomic<decodeStatus> lastStatus =
+                decodeStatus::stopped;
+
+            std::atomic<int> lastFfmpegError = 0;
         };
-    };
 }

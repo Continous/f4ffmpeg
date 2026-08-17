@@ -59,10 +59,9 @@ void decodeWorker::run()
 
     if (frame == nullptr)
     {
-        lastResult = {
-            decodeStatus::ffmpegError,
-            AVERROR(ENOMEM)
-        };
+
+        lastStatus = decodeStatus::ffmpegError;
+        lastFfmpegError = AVERROR(ENOMEM);
 
         running = false;
         return;
@@ -111,7 +110,8 @@ void decodeWorker::run()
         case decodeStatus::endOfFile:
         case decodeStatus::stopped:
         case decodeStatus::ffmpegError:
-            lastResult = result;
+            lastStatus = result.status;
+            lastFfmpegError = result.ffmpegError;
 
             av_frame_free(&frame);
             running = false;
@@ -119,13 +119,24 @@ void decodeWorker::run()
         }
     }
 
-    lastResult = {
-        decodeStatus::stopped,
-        0
-    };
+    lastStatus = decodeStatus::stopped;
+    lastFfmpegError = 0;
 
     av_frame_free(&frame);
     running = false;
+}
+
+decodeResult decodeWorker::getLastResult() const
+{
+    return {
+        lastStatus.load(),
+        lastFfmpegError.load()
+    };
+}
+
+bool decodeWorker::isRunning() const
+{
+    return running;
 }
 
 decodeWorker::~decodeWorker()

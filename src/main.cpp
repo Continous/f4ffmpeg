@@ -13,6 +13,8 @@ extern "C"
 #include "graphics.h"
 #include "tests.h"
 #include "decoderWorker.h"
+#include "manager.h"
+#include "producerWorker.h"
 
 
 extern "C"
@@ -29,20 +31,12 @@ namespace Main
 	static bool isGameReady = false;
 	static bool isF4ffmpegGraphics = false;
 
+	static std::shared_ptr<f4ffmpeg::manager>
+    testManager;
+
 	void onF4SEMessage(F4SE::MessagingInterface::Message* message);
 	void initF4ffmpeg();
 
-	void runTestDecodeCommand()
-	{
-		if (f4ffmpeg::testDecode())
-		{
-			REX::INFO("testDecode started successfully.");
-		}
-		else
-		{
-			REX::ERROR("testDecode failed to start.");
-		}
-	}
 
     bool InitPlugin(const F4SE::LoadInterface* a_f4se)
     {
@@ -150,7 +144,24 @@ namespace Main
 				codec.backend
 			);
 		}
-		runTestDecodeCommand();
+		testManager =
+		f4ffmpeg::createManager(
+			"Data/Video/f4ffmpeg/test.mp4",
+			"Data/Video/f4ffmpeg/testDecode.bmp"
+		);
+
+		if (testManager)
+		{
+			REX::INFO(
+				"Test manager started successfully."
+			);
+		}
+		else
+		{
+			REX::ERROR(
+				"Failed to start test manager."
+			);
+		}
 	}
     F4SE_PLUGIN_QUERY(const F4SE::QueryInterface* a_f4se, F4SE::PluginInfo* a_info)
     {

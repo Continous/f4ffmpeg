@@ -48,6 +48,8 @@ namespace f4ffmpeg
             const AVFrame* frame
         ) const;
 
+        double getCurrentTimestamp() const;
+
     private:
         AVFormatContext* formatContext = nullptr;
         AVCodecContext* codecContext = nullptr;
@@ -59,5 +61,6 @@ namespace f4ffmpeg
 
         bool decoderDraining = false;
         bool decoderEOF = false;
+        double currentTimestamp = -1.0;
     };
 }

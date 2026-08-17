@@ -314,6 +314,9 @@ decodeResult decoder::decodeNextFrame(
 
         if (receiveResult >= 0)
         {
+            currentTimestamp =
+                getFrameTimestamp(outputFrame); //Get timestamp of output frame rather than decoder frame.
+
             return {
                 decodeStatus::frameReady,
                 0
