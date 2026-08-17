@@ -18,7 +18,7 @@ bool decoder::initializeVideoDecoder()
     {
         return false;
     }
-    if (codeContext != nullptr)
+    if (codecContext != nullptr)
     {
         avcodec_free_context(&codecContext);
     }
