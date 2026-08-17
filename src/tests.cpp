@@ -11,6 +11,7 @@ extern "C"
 #include "tests.h"
 #include "decoder.h"
 #include "pch.h"
+#include "decoderWorker.h"
 
 namespace f4ffmpeg
 {
@@ -18,33 +19,101 @@ namespace f4ffmpeg
     namespace
     {
         hardwareTestResults supportedCodecs;
+
+        std::atomic<bool> testDecodeRunning = false;
+        std::thread testDecodeThread;
     }
 
-    bool testDecode()
+void stopTestDecode()
+{
+    if (testDecodeThread.joinable())
     {
-        REX::INFO("testDecode called...");
+        testDecodeThread.join();
+    }
+}
 
-    decoder testDecoder;
-    if (!testDecoder.open(
-            "Data/Video/f4ffmpeg/test.mp4"))
+bool testDecode()
+{
+    if (testDecodeRunning)
     {
-        REX::ERROR("testDecode failed to open test.mp4");
+        REX::WARN("testDecode is already running.");
         return false;
     }
 
-    if (!testDecoder.initializeVideoDecoder())
+    if (testDecodeThread.joinable())
     {
-        REX::ERROR("testDecode failed to initialize video decoder.");
-        return false;
+        testDecodeThread.join();
     }
 
-    AVFrame* frame = av_frame_alloc();
+    testDecodeRunning = true;
 
-    if (frame == nullptr)
+    testDecodeThread = std::thread([]()
     {
-        REX::ERROR("testDecode failed to allocate AVFrame.");
-        return false;
-    }
+        REX::INFO("Starting asynchronous testDecode...");
+
+        decodeWorker worker;
+
+        if (!worker.start(
+                "Data/Video/f4ffmpeg/test.mp4"))
+        {
+            REX::ERROR(
+                "testDecode failed to start decode worker."
+            );
+
+            testDecodeRunning = false;
+            return;
+        }
+
+        while (true)
+        {
+            auto latest =
+                worker.getLatestFrame();
+
+            if (!latest)
+            {
+                std::this_thread::yield();
+                continue;
+            }
+
+            if (latest->timestamp >= 10.0)
+            {
+                REX::INFO(
+                    "testDecode reached 10 seconds. Producing frame..."
+                );
+
+                decoder producer;
+
+                const bool produced =
+                    producer.frameProduce(
+                        latest->frame.get(),
+                        "Data/Video/f4ffmpeg/testDecode.bmp"
+                    );
+
+                worker.stop();
+
+                if (produced)
+                {
+                    REX::INFO(
+                        "testDecode successfully produced testDecode.bmp."
+                    );
+                }
+                else
+                {
+                    REX::ERROR(
+                        "testDecode failed to produce final frame."
+                    );
+                }
+
+                testDecodeRunning = false;
+                return;
+            }
+
+            std::this_thread::yield();
+        }
+    });
+
+    return true;
+}
 
     while (true)
     {

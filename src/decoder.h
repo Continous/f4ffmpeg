@@ -8,6 +8,7 @@ extern "C"
 
 namespace f4ffmpeg
 {
+
     enum class decodeStatus
     {
         frameReady,
@@ -26,6 +27,8 @@ namespace f4ffmpeg
     {
     public:
         ~decoder();
+
+
 
         bool open(const char* path);
         void close();

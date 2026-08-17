@@ -12,6 +12,7 @@ extern "C"
 #include "api.h"
 #include "graphics.h"
 #include "tests.h"
+#include "decoderWorker.h"
 
 
 extern "C"
@@ -35,11 +36,11 @@ namespace Main
 	{
 		if (f4ffmpeg::testDecode())
 		{
-			REX::INFO("testDecode completed successfully.");
+			REX::INFO("testDecode started successfully.");
 		}
 		else
 		{
-			REX::ERROR("testDecode failed.");
+			REX::ERROR("testDecode failed to start.");
 		}
 	}
 

@@ -17,6 +17,8 @@ namespace f4ffmpeg
 
 namespace
 {
+
+
     bool writeBmp(
         const char* path,
         const std::uint8_t* data,
