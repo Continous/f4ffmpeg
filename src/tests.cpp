@@ -42,7 +42,7 @@ namespace f4ffmpeg
 
     if (frame == nullptr)
     {
-        REX:ERROR("testDecode failed to allocate AVFrame.");
+        REX::ERROR("testDecode failed to allocate AVFrame.");
         return false;
     }
 
