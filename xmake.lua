@@ -15,6 +15,9 @@ set_warnings("allextra")
 add_rules("mode.debug", "mode.releasedbg")
 add_rules("plugin.vsxmake.autoupdate")
 
+-- override runtime count
+add_defines("COMMONLIB_RUNTIMECOUNT=3")
+
 -- define targets
 target("f4ffmpeg")
     add_rules("commonlibf4.plugin", {
