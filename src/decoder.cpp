@@ -11,68 +11,18 @@ extern "C"
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
 #include <libswscale/swscale.h>
-#include <libavutil/hwcontext_d3d11va.h>
 }
 
 namespace f4ffmpeg
 {
 
-bool decoder::initializeD3D11Device()
-{
-    auto* falloutDevice =
-        getD3D11Device();
+namespace {
 
-    if (falloutDevice == nullptr)
+    struct d3d11DeviceContextPrefix
     {
-        return false;
-    }
+        void* device = nullptr;
+    };
 
-    hardwareDeviceContext =
-        av_hwdevice_ctx_alloc(
-            AV_HWDEVICE_TYPE_D3D11VA
-        );
-
-    if (hardwareDeviceContext == nullptr)
-    {
-        return false;
-    }
-
-    auto* deviceContext =
-        reinterpret_cast<AVHWDeviceContext*>(
-            hardwareDeviceContext->data
-        );
-
-    auto* d3d11Context =
-        reinterpret_cast<AVD3D11VADeviceContext*>(
-            deviceContext->hwctx
-        );
-    auto* nativeDevice =
-        reinterpret_cast<ID3D11Device*>(
-            falloutDevice
-        );
-    nativeDevice->AddRef();
-
-    d3d11Context->device =
-        nativeDevice;
-    const int result =
-        av_hwdevice_ctx_init(
-            hardwareDeviceContext
-        );
-
-    if (result < 0)
-    {
-        av_buffer_unref(
-            &hardwareDeviceContext
-        );
-
-        return false;
-    }
-
-    return true;
-}
-
-namespace
-{
 
 
     AVPixelFormat getD3D11Format(
@@ -91,8 +41,6 @@ namespace
 
         return AV_PIX_FMT_NONE;
     }
-
-
 
     bool writeBmp(
         const char* path,
@@ -252,6 +200,56 @@ namespace
     }
 }
 
+bool decoder::initializeD3D11Device()
+{
+    auto* falloutDevice =
+        getD3D11Device();
+
+    if (falloutDevice == nullptr)
+    {
+        return false;
+    }
+
+    hardwareDeviceContext =
+        av_hwdevice_ctx_alloc(
+            AV_HWDEVICE_TYPE_D3D11VA
+        );
+
+    if (hardwareDeviceContext == nullptr)
+    {
+        return false;
+    }
+
+    auto* deviceContext =
+        reinterpret_cast<AVHWDeviceContext*>(
+            hardwareDeviceContext->data
+        );
+
+    auto* d3d11Context =
+        reinterpret_cast<d3d11DeviceContextPrefix*>(
+            deviceContext->hwctx
+        );
+        falloutDevice->AddRef();
+
+        d3d11Context->device =
+            falloutDevice;
+
+    const int result =
+        av_hwdevice_ctx_init(
+            hardwareDeviceContext
+        );
+
+    if (result < 0)
+    {
+        av_buffer_unref(
+            &hardwareDeviceContext
+        );
+
+        return false;
+    }
+
+    return true;
+}
 
 bool decoder::frameProduce(
     const AVFrame* frame,
@@ -284,7 +282,7 @@ bool decoder::frameProduce(
 bool decoder::frameProduceD3D11Texture(
     const AVFrame* frame)
 {
-    // Coming next.
+    (void)frame; //Currently unimplemented.
     return false;
 }
 
