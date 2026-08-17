@@ -11,23 +11,17 @@ extern "C"
 namespace f4ffmpeg
 {
 
-bool decoder::hasHardwareDecoder() const
-{
-    return hardwareDecoder;
-}
-
-const std::vector<hardwareCodec>& decoder::getHardwareCodecs() const
-{
-    return hardwareCodecs;
-}
-
-const std::vector<preferredCodec>& decoder::getPreferredCodecs() const
-{
-    return preferredCodecs;
-}
 
 bool decoder::initializeVideoDecoder()
 {
+    if (formatContext == nullptr)
+    {
+        return false;
+    }
+    if (codeContext != nullptr)
+    {
+        avcodec_free_context(&codecContext);
+    }
     videoStreamIndex = av_find_best_stream(
         formatContext,
         AVMEDIA_TYPE_VIDEO,
@@ -56,6 +50,7 @@ bool decoder::initializeVideoDecoder()
             codecContext,
             videoStream->codecpar) < 0)
     {
+        avcodec_free_context(&codecContext);
         return false;
     }
 
@@ -64,127 +59,14 @@ bool decoder::initializeVideoDecoder()
             videoCodec,
             nullptr) < 0)
     {
+        avcodec_free_context(&codecContext);
         return false;
     }
 
     return true;
 }
 
-bool decoder::decodeTestFrame()
-{
-    AVPacket* packet = av_packet_alloc();
-    AVFrame* frame = av_frame_alloc();
 
-    if (packet == nullptr || frame == nullptr)
-    {
-        av_packet_free(&packet);
-        av_frame_free(&frame);
-        return false;
-    }
-
-    bool frameDecoded = false;
-
-    while (av_read_frame(formatContext, packet) >= 0)
-    {
-        if (packet->stream_index == videoStreamIndex)
-        {
-            if (avcodec_send_packet(codecContext, packet) >= 0)
-            {
-                int result =
-                    avcodec_receive_frame(codecContext, frame);
-
-                if (result >= 0)
-                {
-                    frameDecoded = true;
-                    av_packet_unref(packet);
-                    break;
-                }
-            }
-        }
-
-        av_packet_unref(packet);
-    }
-
-    av_packet_free(&packet);
-    av_frame_free(&frame);
-
-    return frameDecoded;
-}
-
-void decoder::testHardwareDevices()
-{
-    hardwareDecoder = false;
-    hardwareCodecs.clear(); //Clear the test so we get new results each time and no duplicates.
-
-    AVHWDeviceType type = AV_HWDEVICE_TYPE_NONE;
-    bool foundDeviceType = false;
-
-    while ((type = av_hwdevice_iterate_types(type)) != AV_HWDEVICE_TYPE_NONE)
-    {
-        foundDeviceType = true;
-
-        const char* deviceName = av_hwdevice_get_type_name(type);
-
-
-        AVBufferRef* deviceContext = nullptr;
-
-        int result = av_hwdevice_ctx_create(
-            &deviceContext,
-            type,
-            nullptr,
-            nullptr,
-            0
-        );
-
-        if (result < 0)
-        {
-            continue;
-        }
-
-        // Capability scan
-        void* iterator = nullptr;
-        const AVCodec* codec = nullptr;
-
-        while ((codec = av_codec_iterate(&iterator)) != nullptr)
-        {
-            if (!av_codec_is_decoder(codec))
-            {
-                continue;
-            }
-
-            for (int i = 0;; i++)
-            {
-                const AVCodecHWConfig* config =
-                    avcodec_get_hw_config(codec, i);
-
-                if (config == nullptr)
-                {
-                    break;
-                }
-
-                if (config->device_type == type)
-                {
-                    hardwareDecoder = true;
-
-                    hardwareCodecs.push_back({
-                        deviceName,
-                        codec->name
-                    });
-                    break;
-                }
-            }
-        }
-
-        av_buffer_unref(&deviceContext);
-    }
-
-    if (!foundDeviceType)
-    {
-        hardwareDecoder = false;
-    }
-
-    buildPreferredCodecs();
-}
         decoder::~decoder()
         {
             close();
@@ -234,35 +116,5 @@ void decoder::testHardwareDevices()
         videoCodec = nullptr;
         videoStreamIndex = -1;
     }
-    void decoder::buildPreferredCodecs()
-    {
-        preferredCodecs.clear();
 
-        for (const auto& hardwareCodec : hardwareCodecs)
-        {
-            auto existing = std::find_if(
-                preferredCodecs.begin(),
-                preferredCodecs.end(),
-                [&](const preferredCodec& item)
-                {
-                    return item.codec == hardwareCodec.codec;
-                }
-            );
-
-            if (existing == preferredCodecs.end())
-            {
-                preferredCodecs.push_back({
-                    hardwareCodec.backend,
-                    hardwareCodec.codec
-                });
-
-                continue;
-            }
-
-            if (hardwareCodec.backend == "d3d11va")
-            {
-                existing->backend = "d3d11va";
-            }
-        }
-    }
 }

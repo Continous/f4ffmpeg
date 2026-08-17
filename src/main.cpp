@@ -11,6 +11,7 @@ extern "C"
 #include "decoder.h"
 #include "api.h"
 #include "graphics.h"
+#include "tests.h"
 
 
 extern "C"
@@ -102,8 +103,41 @@ namespace Main
 		}
 		isF4ffmpegGraphics = true;
 		REX::INFO("f4ffmpeg is graphics ready!");
-	}
 
+		auto reportedResults =
+			f4ffmpeg::testHardwareDevices();
+
+		auto hardwareResults =
+			f4ffmpeg::testHardwareCodecs(reportedResults);
+
+		REX::INFO(
+			"Hardware decoding advertised: {}",
+			reportedResults.hardwareDecodeAdvertised
+		);
+
+		for (const auto& codec : reportedResults.reportedCodecs)
+		{
+			REX::INFO(
+				"Advertised: {} via {}",
+				codec.codec,
+				codec.backend
+			);
+		}
+
+		REX::INFO(
+			"Hardware decoding available: {}",
+			hardwareResults.hardwareDecodeAvailable
+		);
+
+		for (const auto& codec : hardwareResults.codecs)
+		{
+			REX::INFO(
+				"Available: {} via {}",
+				codec.codec,
+				codec.backend
+			);
+		}
+	}
     F4SE_PLUGIN_QUERY(const F4SE::QueryInterface* a_f4se, F4SE::PluginInfo* a_info)
     {
         if (const auto data = F4SE::PluginVersionData::GetSingleton())
