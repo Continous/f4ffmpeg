@@ -145,7 +145,8 @@ manager::~manager()
 std::shared_ptr<manager> createManager(
     const char* inputPath,
     producerOutput output,
-    const char* outputPath)
+    const char* outputPath,
+    bool looping)
 {
     auto newManager =
         std::make_shared<manager>();

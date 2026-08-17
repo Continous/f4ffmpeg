@@ -153,8 +153,6 @@ namespace Main
 		);
 		if (testManager)
 		{
-			testManager->setLooping(true);
-
 			REX::INFO(
 				"Test manager started successfully with looping enabled."
 			);
