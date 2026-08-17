@@ -12,6 +12,12 @@ extern "C"
 
 namespace f4ffmpeg
 {
+
+    namespace
+    {
+        hardwareTestResults supportedCodecs;
+    }
+
     reportedCodecsResults testHardwareDevices()
     {
         reportedCodecsResults results;
@@ -190,10 +196,6 @@ namespace f4ffmpeg
     return results;
     }
 
-    namespace
-    {
-        hardwareTestResults supportedCodecs;
-    }
 
     std::size_t getSupportedCodecCount()
     {
