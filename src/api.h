@@ -8,12 +8,14 @@
 
 namespace f4ffmpeg
 {
-
-    virtual std::uint32_t getVersion() const = 0;
+    inline constexpr std::uint32_t apiVersion = 1;
 
     class api
     {
     public:
+        virtual ~api() = default;
+
+        virtual std::uint32_t getVersion() const = 0;
 
         virtual std::size_t supportedCodecCount() const = 0;
 
@@ -21,14 +23,12 @@ namespace f4ffmpeg
             std::size_t index
         ) const = 0;
 
+        // Here out of convenience and for information, not a guarantee
+        // that the API will use a specific backend.
+        // Fallback events can happen for unknowable reasons.
         virtual const char* supportedCodecBackend(
             std::size_t index
         ) const = 0;
-
-        inline constexpr std::uint32_t apiVersion = 1;
-
-
-        virtual ~api() = default;
 
         virtual decoder* createDecoder() = 0;
         virtual void destroyDecoder(decoder* decoderInstance) = 0;
