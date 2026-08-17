@@ -115,64 +115,7 @@ bool testDecode()
     return true;
 }
 
-    while (true)
-    {
-        const auto result =
-            testDecoder.decodeNextFrame(frame);
 
-        switch (result.status)
-        {
-        case decodeStatus::frameReady:
-            if (testDecoder.getFrameTimestamp(frame) >= 10.0)
-            {
-                REX::INFO(
-                    "testDecode reached 10 seconds. Producing final frame..."
-                );
-                const bool produced =
-                    testDecoder.frameProduce(
-                        frame,
-                        "Data/Video/f4ffmpeg/testDecode.bmp"
-                    );
-                if (produced)
-                {
-                    REX::INFO(
-                        "testDecode succesfully produced testDecode.bmp"
-                    );
-                }
-                else
-                {
-                    REX::ERROR(
-                        "testDecode failed to produce a final frame."
-                    );
-                }
-
-                av_frame_free(&frame);
-                return produced;
-            }
-
-            break;
-
-        case decodeStatus::endOfFile:
-            REX::ERROR("testDecode reached EOF before 10 seconds.");;
-            av_frame_free(&frame);
-            return false;
-
-        case decodeStatus::stopped:
-            REX::ERROR("testDecode stopped.");
-            av_frame_free(&frame);
-            return false;
-
-        case decodeStatus::ffmpegError:
-            REX::ERROR(
-                "FFmpeg decode failed with error {}",
-                result.ffmpegError
-            );
-
-            av_frame_free(&frame);
-            return false;
-        }
-    }
-}
 
     reportedCodecsResults testHardwareDevices()
     {
