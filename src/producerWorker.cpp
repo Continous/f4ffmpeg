@@ -3,7 +3,9 @@
 namespace f4ffmpeg
 {
 
-bool producerWorker::start(const char* path)
+bool producerWorker::start(
+    producerOutput output,
+    const char* path)
 {
     if (running)
     {
@@ -15,12 +17,17 @@ bool producerWorker::start(const char* path)
         workerThread.join();
     }
 
-    if (path == nullptr)
-    {
-        return false;
-    }
+    outputType = output;
 
-    outputPath = path;
+    if (outputType == producerOutput::bitmap)
+    {
+        if (path == nullptr)
+        {
+            return false;
+        }
+
+        outputPath = path;
+    }
 
     pendingFrame.store(
         nullptr,
@@ -89,11 +96,23 @@ void producerWorker::run()
         {
             continue;
         }
+        switch (outputType)
+        {
+        case producerOutput::bitmap:
+            producer.frameProduce(
+                frame->frame.get(),
+                frameProduceMethod::bitmap,
+                outputPath.c_str()
+            );
+            break;
 
-        producer.frameProduce(
-            frame->frame.get(),
-            outputPath.c_str()
-        );
+        case producerOutput::d3d11Texture:
+            producer.frameProduce(
+                frame->frame.get(),
+                frameProduceMethod::d3d11Texture
+            );
+            break;
+        }
     }
 
     running = false;

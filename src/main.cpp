@@ -147,7 +147,9 @@ namespace Main
 		testManager =
 		f4ffmpeg::createManager(
 			"Data/Video/f4ffmpeg/test.mp4",
-			"Data/Video/f4ffmpeg/testDecode.bmp"
+			f4ffmpeg::producerOutput::bitmap,
+			"Data/Video/f4ffmpeg/testDecode.bmp",
+			true
 		);
 		if (testManager)
 		{

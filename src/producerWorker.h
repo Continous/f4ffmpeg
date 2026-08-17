@@ -11,12 +11,23 @@
 
 namespace f4ffmpeg
 {
+    enum class producerOutput
+    {
+        bitmap,
+        d3d11Texture
+    };
+
     class producerWorker
     {
     public:
         ~producerWorker();
 
-        bool start(const char* outputPath);
+        bool start(
+            producerOutput output,
+            const char* outputPath = nullptr
+        );
+
+
         void stop();
 
         void submitFrame(
@@ -40,6 +51,11 @@ namespace f4ffmpeg
         std::condition_variable wakeCondition;
         std::mutex wakeMutex;
 
+
+        producerOutput outputType =
+            producerOutput::bitmap;
+
         std::string outputPath;
     };
 }
+

@@ -177,7 +177,44 @@ namespace
     }
 }
 
+
 bool decoder::frameProduce(
+    const AVFrame* frame,
+    frameProduceMethod method,
+    const char* outputPath)
+{
+    if (frame == nullptr)
+    {
+        return false;
+    }
+
+    switch (method)
+    {
+    case frameProduceMethod::bitmap:
+        return frameProduceBitmap(
+            frame,
+            outputPath
+        );
+
+    case frameProduceMethod::d3d11Texture:
+        return frameProduceD3D11Texture(
+            frame
+        );
+
+    default:
+        return false;
+    }
+}
+
+bool decoder::frameProduceD3D11Texture(
+    const AVFrame* frame)
+{
+    // Coming next.
+    return false;
+}
+
+
+bool decoder::frameProduceBitmap(
     const AVFrame* frame,
     const char* outputPath)
 {
@@ -277,6 +314,12 @@ double decoder::getFrameTimestamp(
     return
         frame->best_effort_timestamp *
         av_q2d(stream->time_base);
+}
+
+
+double decoder::getCurrentTimestamp() const
+{
+    return currentTimestamp;
 }
 
 decodeResult decoder::decodeNextFrame(

@@ -84,10 +84,11 @@ bool testDecode()
                 decoder producer;
 
                 const bool produced =
-                    producer.frameProduce(
-                        latest->frame.get(),
-                        "Data/Video/f4ffmpeg/testDecode.bmp"
-                    );
+                producer.frameProduce(
+                    latest->frame.get(),
+                    frameProduceMethod::bitmap,
+                    "Data/Video/f4ffmpeg/testDecode.bmp"
+                );
 
                 worker.stop();
 

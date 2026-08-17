@@ -9,6 +9,12 @@ extern "C"
 namespace f4ffmpeg
 {
 
+        enum class frameProduceMethod
+    {
+        bitmap,
+        d3d11Texture
+    };
+
     enum class decodeStatus
     {
         frameReady,
@@ -35,7 +41,17 @@ namespace f4ffmpeg
 
         bool frameProduce(
             const AVFrame* frame,
+            frameProduceMethod method,
+            const char* outputPath = nullptr
+        );
+
+        bool frameProduceBitmap(
+            const AVFrame* frame,
             const char* outputPath
+        );
+
+        bool frameProduceD3D11Texture(
+            const AVFrame* frame
         );
 
         bool initializeVideoDecoder();

@@ -17,24 +17,26 @@ namespace f4ffmpeg
 
         bool start(
             const char* inputPath,
-            const char* outputPath
+            producerOutput output,
+            const char* outputPath = nullptr
         );
 
         void stop();
 
-        void manager::setLooping(bool enabled)
+        void setLooping(bool enabled)
         {
             looping = enabled;
         }
 
     private:
+
         void run();
 
         decodeWorker decoderWorker;
         producerWorker producerWorker;
 
         std::string inputPath;
-        bool looping = false;
+        std::atomic<bool> looping = false;
 
         std::thread managerThread;
 
@@ -47,6 +49,8 @@ namespace f4ffmpeg
 
     std::shared_ptr<manager> createManager(
         const char* inputPath,
-        const char* outputPath
+        producerOutput output,
+        const char* outputPath = nullptr,
+        bool looping = false
     );
 }
