@@ -1,4 +1,5 @@
 #include "decoder.h"
+#include "graphics.h"
 #include <algorithm>
 #include <cstdint>
 #include <fstream>
@@ -10,13 +11,87 @@ extern "C"
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
 #include <libswscale/swscale.h>
+#include <libavutil/hwcontext_d3d11va.h>
 }
 
 namespace f4ffmpeg
 {
 
+bool decoder::initializeD3D11Device()
+{
+    auto* falloutDevice =
+        getD3D11Device();
+
+    if (falloutDevice == nullptr)
+    {
+        return false;
+    }
+
+    hardwareDeviceContext =
+        av_hwdevice_ctx_alloc(
+            AV_HWDEVICE_TYPE_D3D11VA
+        );
+
+    if (hardwareDeviceContext == nullptr)
+    {
+        return false;
+    }
+
+    auto* deviceContext =
+        reinterpret_cast<AVHWDeviceContext*>(
+            hardwareDeviceContext->data
+        );
+
+    auto* d3d11Context =
+        reinterpret_cast<AVD3D11VADeviceContext*>(
+            deviceContext->hwctx
+        );
+    auto* nativeDevice =
+        reinterpret_cast<ID3D11Device*>(
+            falloutDevice
+        );
+    nativeDevice->AddRef();
+
+    d3d11Context->device =
+        nativeDevice;
+    const int result =
+        av_hwdevice_ctx_init(
+            hardwareDeviceContext
+        );
+
+    if (result < 0)
+    {
+        av_buffer_unref(
+            &hardwareDeviceContext
+        );
+
+        return false;
+    }
+
+    return true;
+}
+
 namespace
 {
+
+
+    AVPixelFormat getD3D11Format(
+    AVCodecContext*,
+    const AVPixelFormat* formats)
+    {
+        for (const AVPixelFormat* format = formats;
+            *format != AV_PIX_FMT_NONE;
+            ++format)
+        {
+            if (*format == AV_PIX_FMT_D3D11)
+            {
+                return *format;
+            }
+        }
+
+        return AV_PIX_FMT_NONE;
+    }
+
 
 
     bool writeBmp(
@@ -474,6 +549,7 @@ bool decoder::initializeVideoDecoder()
     if (codecContext != nullptr)
     {
         avcodec_free_context(&codecContext);
+        av_buffer_unref(&hardwareDeviceContext);
     }
 
     av_packet_free(&packet);
@@ -506,7 +582,39 @@ bool decoder::initializeVideoDecoder()
             codecContext,
             videoStream->codecpar) < 0)
     {
-        avcodec_free_context(&codecContext);
+        avcodec_free_context(
+            &codecContext
+        );
+
+        return false;
+    }
+    codecContext->get_format =
+        getD3D11Format;
+
+    if (!initializeD3D11Device())
+    {
+        avcodec_free_context(
+            &codecContext
+        );
+
+        return false;
+    }
+
+    codecContext->hw_device_ctx =
+        av_buffer_ref(
+            hardwareDeviceContext
+        );
+
+    if (codecContext->hw_device_ctx == nullptr)
+    {
+        avcodec_free_context(
+            &codecContext
+        );
+
+        av_buffer_unref(
+            &hardwareDeviceContext
+        );
+
         return false;
     }
 
@@ -577,6 +685,9 @@ bool decoder::initializeVideoDecoder()
         {
             avcodec_free_context(&codecContext);
         }
+
+
+        av_buffer_unref(&hardwareDeviceContext);
 
         if (formatContext != nullptr)
         {

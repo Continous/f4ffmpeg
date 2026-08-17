@@ -148,13 +148,13 @@ namespace Main
 		f4ffmpeg::createManager(
 			"Data/Video/f4ffmpeg/test.mp4",
 			f4ffmpeg::producerOutput::bitmap,
-			"Data/Video/f4ffmpeg/testDecode.bmp",
-			true
+			nullptr,
+			false
 		);
 		if (testManager)
 		{
 			REX::INFO(
-				"Test manager started successfully with looping enabled."
+				"Test manager started successfully with looping disabled."
 			);
 		}
 		else

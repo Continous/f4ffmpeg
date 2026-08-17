@@ -67,6 +67,8 @@ void decodeWorker::run()
         return;
     }
 
+    bool reportedD3D11Frame = false;
+
     while (!stopRequested)
     {
         const auto result =
@@ -76,6 +78,24 @@ void decodeWorker::run()
         {
         case decodeStatus::frameReady:
         {
+            if (
+                !reportedD3D11Frame &&
+                frame->format == AV_PIX_FMT_D3D11)
+            {
+                REX::INFO(
+                    "Received hardware D3D11 frame: "
+                    "texture={}, slice={}",
+                    static_cast<void*>(
+                        frame->data[0]
+                    ),
+                    reinterpret_cast<std::intptr_t>(
+                        frame->data[1]
+                    )
+                );
+
+                reportedD3D11Frame = true;
+            }
+
             AVFrame* clonedFrame =
                 av_frame_clone(frame);
 

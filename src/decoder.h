@@ -69,6 +69,10 @@ namespace f4ffmpeg
     private:
         AVFormatContext* formatContext = nullptr;
         AVCodecContext* codecContext = nullptr;
+
+        AVBufferRef* hardwareDeviceContext = nullptr;
+        bool initializeD3D11Device();
+
         const AVCodec* videoCodec = nullptr;
 
         AVPacket* packet = nullptr;
