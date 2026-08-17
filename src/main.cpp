@@ -31,6 +31,18 @@ namespace Main
 	void onF4SEMessage(F4SE::MessagingInterface::Message* message);
 	void initF4ffmpeg();
 
+	void runTestDecodeCommand()
+	{
+		if (f4ffmpeg::testDecode())
+		{
+			REX::INFO("testDecode completed successfully.");
+		}
+		else
+		{
+			REX::ERROR("testDecode failed.");
+		}
+	}
+
     bool InitPlugin(const F4SE::LoadInterface* a_f4se)
     {
         if (isInit)

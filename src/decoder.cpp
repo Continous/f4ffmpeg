@@ -1,15 +1,419 @@
 #include "decoder.h"
 #include <algorithm>
+#include <cstdint>
+#include <fstream>
+#include <vector>
 
 extern "C"
 {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
+#include <libswscale/swscale.h>
 }
 
 namespace f4ffmpeg
 {
+
+namespace
+{
+    bool writeBmp(
+        const char* path,
+        const std::uint8_t* data,
+        int width,
+        int height,
+        int stride)
+    {
+        if (
+            path == nullptr ||
+            data == nullptr ||
+            width <= 0 ||
+            height <= 0 ||
+            stride < width * 4)
+        {
+            return false;
+        }
+
+        std::ofstream file(
+            path,
+            std::ios::binary
+        );
+
+        if (!file)
+        {
+            return false;
+        }
+
+        constexpr std::uint32_t fileHeaderSize = 14;
+        constexpr std::uint32_t infoHeaderSize = 40;
+        constexpr std::uint32_t pixelOffset =
+            fileHeaderSize + infoHeaderSize;
+
+        const std::uint32_t pixelDataSize =
+            static_cast<std::uint32_t>(
+                width * height * 4
+            );
+
+        const std::uint32_t fileSize =
+            pixelOffset + pixelDataSize;
+
+        // BITMAPFILEHEADER
+
+        file.put('B');
+        file.put('M');
+
+        file.write(
+            reinterpret_cast<const char*>(&fileSize),
+            sizeof(fileSize)
+        );
+
+        const std::uint16_t reserved = 0;
+
+        file.write(
+            reinterpret_cast<const char*>(&reserved),
+            sizeof(reserved)
+        );
+
+        file.write(
+            reinterpret_cast<const char*>(&reserved),
+            sizeof(reserved)
+        );
+
+        file.write(
+            reinterpret_cast<const char*>(&pixelOffset),
+            sizeof(pixelOffset)
+        );
+
+
+        // BITMAPINFOHEADER
+
+        file.write(
+            reinterpret_cast<const char*>(&infoHeaderSize),
+            sizeof(infoHeaderSize)
+        );
+
+        const std::int32_t bmpWidth = width;
+
+        // Negative height means rows are stored top-to-bottom.
+        const std::int32_t bmpHeight = -height;
+
+        file.write(
+            reinterpret_cast<const char*>(&bmpWidth),
+            sizeof(bmpWidth)
+        );
+
+        file.write(
+            reinterpret_cast<const char*>(&bmpHeight),
+            sizeof(bmpHeight)
+        );
+
+        const std::uint16_t planes = 1;
+        const std::uint16_t bitsPerPixel = 32;
+
+        file.write(
+            reinterpret_cast<const char*>(&planes),
+            sizeof(planes)
+        );
+
+        file.write(
+            reinterpret_cast<const char*>(&bitsPerPixel),
+            sizeof(bitsPerPixel)
+        );
+
+        const std::uint32_t compression = 0;
+
+        file.write(
+            reinterpret_cast<const char*>(&compression),
+            sizeof(compression)
+        );
+
+        file.write(
+            reinterpret_cast<const char*>(&pixelDataSize),
+            sizeof(pixelDataSize)
+        );
+
+        const std::int32_t pixelsPerMeter = 0;
+
+        file.write(
+            reinterpret_cast<const char*>(&pixelsPerMeter),
+            sizeof(pixelsPerMeter)
+        );
+
+        file.write(
+            reinterpret_cast<const char*>(&pixelsPerMeter),
+            sizeof(pixelsPerMeter)
+        );
+
+        const std::uint32_t colorsUsed = 0;
+        const std::uint32_t importantColors = 0;
+
+        file.write(
+            reinterpret_cast<const char*>(&colorsUsed),
+            sizeof(colorsUsed)
+        );
+
+        file.write(
+            reinterpret_cast<const char*>(&importantColors),
+            sizeof(importantColors)
+        );
+
+
+        // Pixel data.
+        // BGRA matches 32-bit BMP byte order nicely.
+
+        for (int y = 0; y < height; ++y)
+        {
+            file.write(
+                reinterpret_cast<const char*>(
+                    data + y * stride
+                ),
+                width * 4
+            );
+        }
+
+        return file.good();
+    }
+}
+
+bool decoder::frameProduce(
+    const AVFrame* frame,
+    const char* outputPath)
+{
+    if (frame == nullptr || outputPath == nullptr)
+    {
+        return false;
+    }
+
+    const int width = frame->width;
+    const int height = frame->height;
+    const int stride = width * 4;
+
+    std::vector<std::uint8_t> bgraBuffer(
+        static_cast<std::size_t>(stride) * height
+    );
+
+    SwsContext* swsContext = sws_getContext(
+        width,
+        height,
+        static_cast<AVPixelFormat>(frame->format),
+        width,
+        height,
+        AV_PIX_FMT_BGRA,
+        SWS_BILINEAR,
+        nullptr,
+        nullptr,
+        nullptr
+    );
+
+    if (swsContext == nullptr)
+    {
+        return false;
+    }
+
+    std::uint8_t* outputData[4]{
+        bgraBuffer.data(),
+        nullptr,
+        nullptr,
+        nullptr
+    };
+
+    int outputLinesize[4]{
+        stride,
+        0,
+        0,
+        0
+    };
+
+    const int convertedHeight = sws_scale(
+        swsContext,
+        frame->data,
+        frame->linesize,
+        0,
+        height,
+        outputData,
+        outputLinesize
+    );
+
+    sws_freeContext(swsContext);
+
+    if (convertedHeight != height)
+    {
+        return false;
+    }
+
+    if (!writeBmp(
+        outputPath,
+        bgraBuffer.data(),
+        width,
+        height,
+        stride))
+    {
+        return false;
+    }
+
+
+    return true;
+}
+
+
+
+double decoder::getFrameTimestamp(
+    const AVFrame* frame) const
+{
+    if (
+        frame == nullptr ||
+        formatContext == nullptr ||
+        videoStreamIndex < 0 ||
+        frame->best_effort_timestamp == AV_NOPTS_VALUE)
+    {
+        return -1.0;
+    }
+
+    const AVStream* stream =
+        formatContext->streams[videoStreamIndex];
+
+    return
+        frame->best_effort_timestamp *
+        av_q2d(stream->time_base);
+}
+
+decodeResult decoder::decodeNextFrame(
+    AVFrame* outputFrame)
+{
+    if (
+        formatContext == nullptr ||
+        codecContext == nullptr ||
+        outputFrame == nullptr)
+    {
+        return {
+            decodeStatus::ffmpegError,
+            AVERROR(EINVAL)
+        };
+    }
+
+    if (decoderEOF)
+    {
+        return {
+            decodeStatus::endOfFile,
+            0
+        };
+    }
+
+    av_frame_unref(outputFrame);
+
+    while (true)
+    {
+        // First ask FFmpeg whether it already has a decoded frame ready.
+        const int receiveResult =
+            avcodec_receive_frame(
+                codecContext,
+                outputFrame
+            );
+
+        if (receiveResult >= 0)
+        {
+            return {
+                decodeStatus::frameReady,
+                0
+            };
+        }
+
+        if (receiveResult == AVERROR_EOF)
+        {
+            decoderEOF = true;
+
+            return {
+                decodeStatus::endOfFile,
+                0
+            };
+        }
+
+        if (receiveResult != AVERROR(EAGAIN))
+        {
+            return {
+                decodeStatus::ffmpegError,
+                receiveResult
+            };
+        }
+
+        // EAGAIN means FFmpeg needs more compressed data.
+        if (decoderDraining)
+        {
+
+            decoderEOF = true;
+
+            return{
+             decodeStatus::endOfFile,
+             0
+            };
+        }
+
+        bool packetSent = false;
+
+        while (!packetSent)
+        {
+            const int readResult =
+                av_read_frame(
+                    formatContext,
+                    packet
+                );
+
+            if (readResult < 0)
+            {
+                // Demuxer reached the end. Flush the decoder.
+                const int flushResult =
+                    avcodec_send_packet(
+                        codecContext,
+                        nullptr
+                    );
+
+                decoderDraining = true;
+
+                if (
+                    flushResult < 0 &&
+                    flushResult != AVERROR_EOF)
+                {
+                    return {
+                        decodeStatus::ffmpegError,
+                        flushResult
+                    };
+                }
+
+                break;
+            }
+
+            if (packet->stream_index != videoStreamIndex)
+            {
+                av_packet_unref(packet);
+                continue;
+            }
+
+            const int sendResult =
+                avcodec_send_packet(
+                    codecContext,
+                    packet
+                );
+
+            av_packet_unref(packet);
+
+            if (sendResult == AVERROR(EAGAIN))
+            {
+                // Decoder wants us to receive something first.
+                break;
+            }
+
+            if (sendResult < 0)
+            {
+                return {
+                    decodeStatus::ffmpegError,
+                    sendResult
+                };
+            }
+
+            packetSent = true;
+        }
+    }
+}
 
 
 bool decoder::initializeVideoDecoder()
@@ -18,10 +422,14 @@ bool decoder::initializeVideoDecoder()
     {
         return false;
     }
+
     if (codecContext != nullptr)
     {
         avcodec_free_context(&codecContext);
     }
+
+    av_packet_free(&packet);
+
     videoStreamIndex = av_find_best_stream(
         formatContext,
         AVMEDIA_TYPE_VIDEO,
@@ -62,6 +470,16 @@ bool decoder::initializeVideoDecoder()
         avcodec_free_context(&codecContext);
         return false;
     }
+    packet = av_packet_alloc();
+
+    if (packet == nullptr)
+    {
+        avcodec_free_context(&codecContext);
+        return false;
+    }
+
+    decoderDraining = false;
+    decoderEOF = false;
 
     return true;
 }
@@ -103,18 +521,24 @@ bool decoder::initializeVideoDecoder()
         return true;
     }
 
-        void decoder::close()
+    void decoder::close()
     {
+        av_packet_free(&packet);
+
         if (codecContext != nullptr)
         {
             avcodec_free_context(&codecContext);
         }
+
         if (formatContext != nullptr)
         {
             avformat_close_input(&formatContext);
         }
+
         videoCodec = nullptr;
         videoStreamIndex = -1;
-    }
 
+        decoderDraining = false;
+        decoderEOF = false;
+    }
 }
