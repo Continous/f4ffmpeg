@@ -10,6 +10,7 @@ extern "C"
 
 #include "tests.h"
 #include "decoder.h"
+#include "pch.h"
 
 namespace f4ffmpeg
 {
