@@ -40,9 +40,9 @@ namespace f4ffmpeg
         d3d11Device = rendererData->device;
         d3d11DeviceContext = rendererData->context;
 
-        graphicsInitialized = true;
+
         const auto deviceFlags =
-            falloutDevice->GetCreationFlags();
+            d3d11Device->GetCreationFlags();
 
         constexpr std::uint32_t videoSupportFlag =
             0x800;
@@ -56,6 +56,7 @@ namespace f4ffmpeg
             "Fallout D3D11 VIDEO_SUPPORT flag: {}",
             (deviceFlags & videoSupportFlag) != 0
         );
+        graphicsInitialized = true;
         return true;
     }
 
