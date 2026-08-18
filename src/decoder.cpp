@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <fstream>
 #include <vector>
+#include "pch.h"
 
 extern "C"
 {

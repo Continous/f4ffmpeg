@@ -1,4 +1,5 @@
 #include "graphics.h"
+#include "pch.h"
 
 #include <RE/B/BSGraphics.h>
 
