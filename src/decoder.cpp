@@ -12,7 +12,7 @@ extern "C"
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
 #include <libswscale/swscale.h>
-#include <pixdesc.h>
+#include <libavutil/pixdesc.h>
 }
 
 namespace f4ffmpeg
