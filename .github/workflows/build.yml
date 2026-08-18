@@ -11,9 +11,14 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  XMAKE_PKG_CACHEDIR: ${{ github.workspace }}\.xmake-cache
+  XMAKE_PKG_INSTALLDIR: ${{ github.workspace }}\.xmake-packages
+
 jobs:
   xmake:
     runs-on: windows-latest
+
     strategy:
       fail-fast: false
       matrix:
@@ -22,6 +27,7 @@ jobs:
         toolchain:
           - msvc
           - clang-cl
+
     steps:
       - name: checkout
         uses: actions/checkout@v6
@@ -33,6 +39,16 @@ jobs:
         with:
           xmake-version: "latest"
 
+      - name: Cache Xmake packages
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ github.workspace }}\.xmake-cache
+            ${{ github.workspace }}\.xmake-packages
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ matrix.toolchain }}-xmake-${{ hashFiles('xmake.lua') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-${{ matrix.toolchain }}-xmake-
+
       - name: config
         run: xmake config -y --mode=${{ matrix.mode }} --toolchain=${{ matrix.toolchain }}
 
@@ -42,8 +58,8 @@ jobs:
       - name: upload
         uses: actions/upload-artifact@v7
         with:
-            name: f4ffmpeg
-            path: |
-              build/**/*.dll
-              build/**/*.pdb
-            if-no-files-found: error
+          name: f4ffmpeg-${{ matrix.toolchain }}
+          path: |
+            build/**/*.dll
+            build/**/*.pdb
+          if-no-files-found: error

@@ -38,7 +38,7 @@ bool decodeWorker::start(const char* path)
     stopRequested = false;
     running = true;
 
-    REX::INFO("Decode worker is now running.");
+    REX::INFO("Decode worker start has returned running = true.");
 
     workerThread = std::thread(
         &decodeWorker::run,
@@ -60,6 +60,8 @@ void decodeWorker::stop()
 
 void decodeWorker::run()
 {
+
+    REX::INFO("Decode worker is now running.");
     AVFrame* frame = av_frame_alloc();
 
     if (frame == nullptr)
@@ -81,26 +83,37 @@ void decodeWorker::run()
 
         switch (result.status)
         {
-        case decodeStatus::frameReady:
-        {
-            REX::INFO("Reached frameReady");
-            if (
-                !reportedD3D11Frame &&
-                frame->format == AV_PIX_FMT_D3D11)
+            case decodeStatus::frameReady:
             {
-                REX::INFO(
-                    "Received hardware D3D11 frame: "
-                    "texture={}, slice={}",
-                    static_cast<void*>(
-                        frame->data[0]
-                    ),
-                    reinterpret_cast<std::intptr_t>(
-                        frame->data[1]
-                    )
-                );
+                if (!reportedFirstFrame)
+                {
+                    REX::INFO(
+                        "First decoded frame format: {} "
+                        "(AV_PIX_FMT_D3D11 = {})",
+                        frame->format,
+                        static_cast<int>(AV_PIX_FMT_D3D11)
+                    );
 
-                reportedD3D11Frame = true;
-            }
+                    reportedFirstFrame = true;
+                }
+
+                if (
+                    !reportedD3D11Frame &&
+                    frame->format == AV_PIX_FMT_D3D11)
+                {
+                    REX::INFO(
+                        "Received hardware D3D11 frame: "
+                        "texture={}, slice={}",
+                        static_cast<void*>(
+                            frame->data[0]
+                        ),
+                        reinterpret_cast<std::intptr_t>(
+                            frame->data[1]
+                        )
+                    );
+
+                    reportedD3D11Frame = true;
+                }
 
             AVFrame* clonedFrame =
                 av_frame_clone(frame);
@@ -134,8 +147,44 @@ void decodeWorker::run()
         }
 
         case decodeStatus::endOfFile:
+            REX::INFO(
+                "Decoder thread reached EOF."
+            );
+
+            lastStatus = result.status;
+            lastFfmpegError = result.ffmpegError;
+
+            av_frame_free(&frame);
+            running = false;
+            return;
+
         case decodeStatus::stopped:
+            REX::INFO(
+                "Decoder thread received stop command."
+            );
+
+            lastStatus = result.status;
+            lastFfmpegError = result.ffmpegError;
+
+            av_frame_free(&frame);
+            running = false;
+            return;
+
         case decodeStatus::ffmpegError:
+            REX::ERROR(
+                "Decoder thread received an FFmpeg error."
+            );
+
+            REX::ERROR(
+                "Last status: {}",
+                static_cast<int>(result.status)
+            );
+
+            REX::ERROR(
+                "FFmpeg error: {}",
+                result.ffmpegError
+            );
+
             lastStatus = result.status;
             lastFfmpegError = result.ffmpegError;
 

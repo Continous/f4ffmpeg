@@ -26,9 +26,14 @@ namespace {
 
 
     AVPixelFormat getD3D11Format(
-    AVCodecContext*,
-    const AVPixelFormat* formats)
+        AVCodecContext*,
+        const AVPixelFormat* formats)
     {
+        if (formats == nullptr)
+        {
+            return AV_PIX_FMT_NONE;
+        }
+
         for (const AVPixelFormat* format = formats;
             *format != AV_PIX_FMT_NONE;
             ++format)
@@ -422,11 +427,14 @@ decodeResult decoder::decodeNextFrame(
     while (true)
     {
         // First ask FFmpeg whether it already has a decoded frame ready.
+        REX::INFO("Calling to receive a frame...");
         const int receiveResult =
             avcodec_receive_frame(
                 codecContext,
                 outputFrame
             );
+
+            REX::INFO("We've received frame result: {}", receiveResult);
 
         if (receiveResult >= 0)
         {
@@ -473,11 +481,13 @@ decodeResult decoder::decodeNextFrame(
 
         while (!packetSent)
         {
+            REX::INFO("Calling to read frame...");
             const int readResult =
                 av_read_frame(
                     formatContext,
                     packet
                 );
+                REX::INFO("We've received result: {}", readResult);
 
             if (readResult < 0)
             {
@@ -509,11 +519,16 @@ decodeResult decoder::decodeNextFrame(
                 continue;
             }
 
+
+                REX::INFO("Decode worker is now running.");
+
             const int sendResult =
                 avcodec_send_packet(
                     codecContext,
                     packet
                 );
+
+                REX::INFO("We've received result: {}", sendResult);
 
             av_packet_unref(packet);
 
