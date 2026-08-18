@@ -9,6 +9,8 @@ extern "C"
 namespace f4ffmpeg
 {
 
+        void initializeFFmpegLogging();
+
         enum class frameProduceMethod
     {
         bitmap,

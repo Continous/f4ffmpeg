@@ -13,6 +13,7 @@ extern "C"
 #include <libavutil/hwcontext.h>
 #include <libswscale/swscale.h>
 #include <libavutil/pixdesc.h>
+#include <libavutil/log.h>
 }
 
 namespace f4ffmpeg
@@ -748,5 +749,45 @@ bool decoder::initializeVideoDecoder()
 
         decoderDraining = false;
         decoderEOF = false;
+    }
+            //Get ffmpeg logs.
+    namespace
+    {
+        void ffmpegLogCallback(
+            void*,
+            int level,
+            const char* format,
+            va_list args)
+        {
+            if (level > AV_LOG_VERBOSE)
+            {
+                return;
+            }
+
+            char buffer[1024]{};
+
+            vsnprintf(
+                buffer,
+                sizeof(buffer),
+                format,
+                args
+            );
+
+            REX::INFO(
+                "[FFmpeg] {}",
+                buffer
+            );
+        }
+    }
+
+    void initializeFFmpegLogging()
+    {
+        av_log_set_level(
+            AV_LOG_VERBOSE
+        );
+
+        av_log_set_callback(
+            ffmpegLogCallback
+        );
     }
 }

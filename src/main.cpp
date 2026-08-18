@@ -99,6 +99,7 @@ namespace Main
 	void initF4ffmpeg()
 	{
 		REX::INFO("Beginning f4ffmpeg graphics initialization");
+		f4ffmpeg::initializeFFmpegLogging();
 
 		if(!f4ffmpeg::initializeGraphics())
 		{
