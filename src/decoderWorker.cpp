@@ -1,6 +1,13 @@
 #include "decoderWorker.h"
 #include "pch.h"
 
+
+extern "C"
+{
+#include <libavutil/pixdesc.h>
+#include <libavutil/hwcontext.h>
+}
+
 namespace f4ffmpeg
 {
 
