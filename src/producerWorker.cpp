@@ -107,10 +107,10 @@ void producerWorker::run()
             );
             break;
 
-        case producerOutput::d3d11Texture:
+        case producerOutput::gpuTexture:
             producer.frameProduce(
                 frame->frame.get(),
-                frameProduceMethod::d3d11Texture
+                frameProduceMethod::gpuTexture
             );
             break;
         }
