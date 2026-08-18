@@ -7,6 +7,7 @@ namespace f4ffmpeg
 
 bool decodeWorker::start(const char* path)
 {
+    REX::INFO("Decode worker has been called.");
     if (running)
     {
         return false;
@@ -29,12 +30,15 @@ bool decodeWorker::start(const char* path)
 
     if (!workerDecoder.initializeVideoDecoder())
     {
+        REX::ERROR("Decode worker closed due to uninitialized Video Decoder.");
         workerDecoder.close();
         return false;
     }
 
     stopRequested = false;
     running = true;
+
+    REX::INFO("Decode worker is now running.");
 
     workerThread = std::thread(
         &decodeWorker::run,
