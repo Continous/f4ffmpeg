@@ -14,7 +14,7 @@ namespace f4ffmpeg
     enum class producerOutput
     {
         bitmap,
-        d3d11Texture
+        gpuTexture
     };
 
     class producerWorker
