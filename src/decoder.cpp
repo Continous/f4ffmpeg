@@ -435,7 +435,7 @@ decodeResult decoder::decodeNextFrame(
                 outputFrame
             );
 
-            REX::INFO("We've received frame result: {}", receiveResult);
+            REX::INFO("We've received receiveResult: {}", receiveResult);
 
         if (receiveResult >= 0)
         {
@@ -488,7 +488,7 @@ decodeResult decoder::decodeNextFrame(
                     formatContext,
                     packet
                 );
-                REX::INFO("We've received result: {}", readResult);
+                REX::INFO("We've received readResult: {}", readResult);
 
             if (readResult < 0)
             {
@@ -529,7 +529,7 @@ decodeResult decoder::decodeNextFrame(
                     packet
                 );
 
-                REX::INFO("We've received result: {}", sendResult);
+                REX::INFO("We've received sendResult: {}", sendResult);
 
             av_packet_unref(packet);
 
