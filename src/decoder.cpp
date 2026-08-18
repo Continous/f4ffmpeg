@@ -12,6 +12,7 @@ extern "C"
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
 #include <libswscale/swscale.h>
+#include <pixdesc.h>
 }
 
 namespace f4ffmpeg
@@ -32,18 +33,52 @@ namespace {
     {
         if (formats == nullptr)
         {
+            REX::ERROR(
+                "FFmpeg supplied no pixel formats."
+            );
+
             return AV_PIX_FMT_NONE;
         }
+
+        REX::INFO(
+            "FFmpeg requested pixel format selection."
+        );
 
         for (const AVPixelFormat* format = formats;
             *format != AV_PIX_FMT_NONE;
             ++format)
         {
+            const char* formatName =
+                av_get_pix_fmt_name(*format);
+
+            const AVPixFmtDescriptor* descriptor =
+                av_pix_fmt_desc_get(*format);
+
+            const bool hardwareFormat =
+                descriptor != nullptr &&
+                (descriptor->flags &
+                AV_PIX_FMT_FLAG_HWACCEL);
+
+            REX::INFO(
+                "Offered pixel format: {} ({}) hardware={}",
+                formatName ? formatName : "unknown",
+                static_cast<int>(*format),
+                hardwareFormat
+            );
+
             if (*format == AV_PIX_FMT_D3D11)
             {
+                REX::INFO(
+                    "Selecting D3D11 pixel format."
+                );
+
                 return *format;
             }
         }
+
+        REX::ERROR(
+            "FFmpeg did not offer a D3D11 pixel format."
+        );
 
         return AV_PIX_FMT_NONE;
     }

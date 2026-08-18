@@ -94,6 +94,29 @@ void decodeWorker::run()
                         frame->format,
                         static_cast<int>(AV_PIX_FMT_D3D11)
                     );
+                    if (frame->hw_frames_ctx != nullptr)
+                    {
+                        auto* framesContext =
+                            reinterpret_cast<AVHWFramesContext*>(
+                                frame->hw_frames_ctx->data
+                            );
+
+                        const AVPixelFormat softwareFormat =
+                            framesContext->sw_format;
+
+                        const char* softwareFormatName =
+                            av_get_pix_fmt_name(
+                                softwareFormat
+                            );
+
+                        REX::INFO(
+                            "D3D11 frame backing format: {} ({})",
+                            softwareFormatName
+                                ? softwareFormatName
+                                : "unknown",
+                            static_cast<int>(softwareFormat)
+                        );
+                    }
 
                     reportedFirstFrame = true;
                 }
