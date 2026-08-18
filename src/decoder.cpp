@@ -21,11 +21,6 @@ namespace f4ffmpeg
 
 namespace {
 
-    struct d3d11DeviceContextPrefix
-    {
-        void* device = nullptr;
-    };
-
 
 
     AVPixelFormat getD3D11Format(
@@ -244,51 +239,34 @@ namespace {
 
 bool decoder::initializeD3D11Device()
 {
-    auto* falloutDevice =
-        getD3D11Device();
-
-    if (falloutDevice == nullptr)
-    {
-        return false;
-    }
-
-    hardwareDeviceContext =
-        av_hwdevice_ctx_alloc(
-            AV_HWDEVICE_TYPE_D3D11VA
-        );
-
-    if (hardwareDeviceContext == nullptr)
-    {
-        return false;
-    }
-
-    auto* deviceContext =
-        reinterpret_cast<AVHWDeviceContext*>(
-            hardwareDeviceContext->data
-        );
-
-    auto* d3d11Context =
-        reinterpret_cast<d3d11DeviceContextPrefix*>(
-            deviceContext->hwctx
-        );
-        falloutDevice->AddRef();
-
-        d3d11Context->device =
-            falloutDevice;
+    av_buffer_unref(
+        &hardwareDeviceContext
+    );
 
     const int result =
-        av_hwdevice_ctx_init(
-            hardwareDeviceContext
+        av_hwdevice_ctx_create(
+            &hardwareDeviceContext,
+            AV_HWDEVICE_TYPE_D3D11VA,
+            nullptr,
+            nullptr,
+            0
         );
 
     if (result < 0)
     {
-        av_buffer_unref(
-            &hardwareDeviceContext
+        hardwareDeviceContext = nullptr;
+
+        REX::ERROR(
+            "Failed to create FFmpeg D3D11VA device: {}",
+            result
         );
 
         return false;
     }
+
+    REX::INFO(
+        "FFmpeg D3D11VA device initialized."
+    );
 
     return true;
 }
