@@ -1,5 +1,4 @@
 #include "decoder.h"
-#include "graphics.h"
 #include <algorithm>
 #include <cstdint>
 #include <fstream>
@@ -23,24 +22,33 @@ namespace {
 
 
 
-    AVPixelFormat getD3D11Format(
-        AVCodecContext*,
+    AVPixelFormat getHardwareFormat(
+        AVCodecContext* codecContext,
         const AVPixelFormat* formats)
     {
-        if (formats == nullptr)
+        if (
+            codecContext == nullptr ||
+            codecContext->opaque == nullptr ||
+            formats == nullptr)
         {
             REX::ERROR(
-                "FFmpeg supplied no pixel formats."
+                "FFmpeg supplied invalid hardware format context."
             );
 
             return AV_PIX_FMT_NONE;
         }
 
+        const auto* hardwarePixelFormat =
+            static_cast<const AVPixelFormat*>(
+                codecContext->opaque
+            );
+
         REX::INFO(
-            "FFmpeg requested pixel format selection."
+            "FFmpeg requested hardware pixel format selection."
         );
 
-        for (const AVPixelFormat* format = formats;
+        for (
+            const AVPixelFormat* format = formats;
             *format != AV_PIX_FMT_NONE;
             ++format)
         {
@@ -52,20 +60,27 @@ namespace {
 
             const bool hardwareFormat =
                 descriptor != nullptr &&
-                (descriptor->flags &
-                AV_PIX_FMT_FLAG_HWACCEL);
+                (
+                    descriptor->flags &
+                    AV_PIX_FMT_FLAG_HWACCEL
+                );
 
             REX::INFO(
                 "Offered pixel format: {} ({}) hardware={}",
-                formatName ? formatName : "unknown",
+                formatName
+                    ? formatName
+                    : "unknown",
                 static_cast<int>(*format),
                 hardwareFormat
             );
 
-            if (*format == AV_PIX_FMT_D3D11)
+            if (*format == *hardwarePixelFormat)
             {
                 REX::INFO(
-                    "Selecting D3D11 pixel format."
+                    "Selecting hardware pixel format: {}",
+                    formatName
+                        ? formatName
+                        : "unknown"
                 );
 
                 return *format;
@@ -73,10 +88,44 @@ namespace {
         }
 
         REX::ERROR(
-            "FFmpeg did not offer a D3D11 pixel format."
+            "FFmpeg did not offer the selected hardware pixel format."
         );
 
         return AV_PIX_FMT_NONE;
+    }
+
+    const AVCodecHWConfig* findHardwareConfig(
+        const AVCodec* codec,
+        AVHWDeviceType deviceType)
+    {
+        if (codec == nullptr)
+        {
+            return nullptr;
+        }
+
+        for (int index = 0;; ++index)
+        {
+            const AVCodecHWConfig* config =
+                avcodec_get_hw_config(
+                    codec,
+                    index
+                );
+
+            if (config == nullptr)
+            {
+                return nullptr;
+            }
+
+            if (
+                config->device_type == deviceType &&
+                (
+                    config->methods &
+                    AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX
+                ))
+            {
+                return config;
+            }
+        }
     }
 
     bool writeBmp(
@@ -237,16 +286,29 @@ namespace {
     }
 }
 
-bool decoder::initializeD3D11Device()
+bool decoder::initializeHardwareDevice(
+    AVHWDeviceType deviceType)
 {
     av_buffer_unref(
         &hardwareDeviceContext
     );
 
+    const char* deviceName =
+        av_hwdevice_get_type_name(
+            deviceType
+        );
+
+    REX::INFO(
+        "Trying FFmpeg hardware device: {}",
+        deviceName
+            ? deviceName
+            : "unknown"
+    );
+
     const int result =
         av_hwdevice_ctx_create(
             &hardwareDeviceContext,
-            AV_HWDEVICE_TYPE_D3D11VA,
+            deviceType,
             nullptr,
             nullptr,
             0
@@ -257,7 +319,10 @@ bool decoder::initializeD3D11Device()
         hardwareDeviceContext = nullptr;
 
         REX::ERROR(
-            "Failed to create FFmpeg D3D11VA device: {}",
+            "Failed to create FFmpeg hardware device {}: {}",
+            deviceName
+                ? deviceName
+                : "unknown",
             result
         );
 
@@ -265,7 +330,10 @@ bool decoder::initializeD3D11Device()
     }
 
     REX::INFO(
-        "FFmpeg D3D11VA device initialized."
+        "FFmpeg hardware device initialized: {}",
+        deviceName
+            ? deviceName
+            : "unknown"
     );
 
     return true;
@@ -283,23 +351,50 @@ bool decoder::frameProduce(
 
     switch (method)
     {
-    case frameProduceMethod::bitmap:
-        return frameProduceBitmap(
-            frame,
-            outputPath
-        );
+        case frameProduceMethod::bitmap:
+        {
+            return frameProduceBitmap(
+                frame,
+                outputPath
+            );
+        }
 
-    case frameProduceMethod::d3d11Texture:
-        return frameProduceD3D11Texture(
-            frame
-        );
+        case frameProduceMethod::gpuTexture:
+        {
+            if (frame->format == AV_PIX_FMT_VULKAN)
+            {
+                return frameProduceVulkan(
+                    frame
+                );
+            }
 
-    default:
-        return false;
+            if (frame->format == AV_PIX_FMT_D3D11)
+            {
+                return frameProduceD3D11(
+                    frame
+                );
+            }
+
+            REX::ERROR(
+                "Unsupported hardware frame format: {}",
+                frame->format
+            );
+
+            return false;
+        }
     }
+
+    return false;
 }
 
-bool decoder::frameProduceD3D11Texture(
+bool decoder::frameProduceD3D11(
+    const AVFrame* frame)
+{
+    (void)frame; //Currently unimplemented.
+    return false;
+}
+
+bool decoder::frameProduceVulkan(
     const AVFrame* frame)
 {
     (void)frame; //Currently unimplemented.
@@ -616,17 +711,119 @@ bool decoder::initializeVideoDecoder()
 
         return false;
     }
-    codecContext->get_format =
-        getD3D11Format;
 
-    if (!initializeD3D11Device())
-    {
-        avcodec_free_context(
-            &codecContext
+    const AVCodecHWConfig* hardwareConfig =
+        findHardwareConfig(
+            videoCodec,
+            AV_HWDEVICE_TYPE_VULKAN
         );
 
-        return false;
+    if (hardwareConfig != nullptr)
+    {
+        hardwareDeviceType =
+            AV_HWDEVICE_TYPE_VULKAN;
+
+        hardwarePixelFormat =
+            hardwareConfig->pix_fmt;
+
+        REX::INFO(
+            "Codec {} supports Vulkan hardware decoding.",
+            videoCodec->name
+        );
     }
+    else
+    {
+        hardwareConfig =
+            findHardwareConfig(
+                videoCodec,
+                AV_HWDEVICE_TYPE_D3D11VA
+            );
+
+        if (hardwareConfig == nullptr)
+        {
+            REX::ERROR(
+                "Codec {} supports neither Vulkan nor D3D11VA hardware decoding.",
+                videoCodec->name
+            );
+
+            avcodec_free_context(
+                &codecContext
+            );
+
+            return false;
+        }
+
+        hardwareDeviceType =
+            AV_HWDEVICE_TYPE_D3D11VA;
+
+        hardwarePixelFormat =
+            hardwareConfig->pix_fmt;
+
+        REX::INFO(
+            "Codec {} supports D3D11VA hardware decoding.",
+            videoCodec->name
+        );
+    }
+
+
+    if (!initializeHardwareDevice(
+            hardwareDeviceType))
+    {
+        if (
+            hardwareDeviceType !=
+            AV_HWDEVICE_TYPE_VULKAN)
+        {
+            avcodec_free_context(
+                &codecContext
+            );
+
+            return false;
+        }
+
+        REX::INFO(
+            "Vulkan device unavailable; trying D3D11VA."
+        );
+
+        hardwareConfig =
+            findHardwareConfig(
+                videoCodec,
+                AV_HWDEVICE_TYPE_D3D11VA
+            );
+
+        if (hardwareConfig == nullptr)
+        {
+            avcodec_free_context(
+                &codecContext
+            );
+
+            return false;
+        }
+
+        hardwareDeviceType =
+            AV_HWDEVICE_TYPE_D3D11VA;
+
+        hardwarePixelFormat =
+            hardwareConfig->pix_fmt;
+
+        if (!initializeHardwareDevice(
+                hardwareDeviceType))
+        {
+            avcodec_free_context(
+                &codecContext
+            );
+
+            return false;
+        }
+
+    }
+
+
+    codecContext->opaque =
+        &hardwarePixelFormat;
+
+    codecContext->get_format =
+        getHardwareFormat;
+
 
     codecContext->hw_device_ctx =
         av_buffer_ref(
@@ -645,29 +842,44 @@ bool decoder::initializeVideoDecoder()
 
         return false;
     }
+            const int openResult =
+                avcodec_open2(
+                    codecContext,
+                    videoCodec,
+                    nullptr
+                );
 
-    if (avcodec_open2(
-            codecContext,
-            videoCodec,
-            nullptr) < 0)
-    {
-        avcodec_free_context(&codecContext);
-        return false;
-    }
-    packet = av_packet_alloc();
+            if (openResult < 0)
+            {
+                REX::ERROR(
+                    "Failed to open hardware video decoder: {}",
+                    openResult
+                );
 
-    if (packet == nullptr)
-    {
-        avcodec_free_context(&codecContext);
-        return false;
-    }
+                avcodec_free_context(
+                    &codecContext
+                );
 
-    decoderDraining = false;
-    decoderEOF = false;
+                return false;
+            }
 
-    return true;
-}
+            packet =
+                av_packet_alloc();
 
+            if (packet == nullptr)
+            {
+                avcodec_free_context(
+                    &codecContext
+                );
+
+                return false;
+            }
+
+            decoderDraining = false;
+            decoderEOF = false;
+
+            return true;
+        }
 
         decoder::~decoder()
         {

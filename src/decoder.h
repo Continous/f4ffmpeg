@@ -4,6 +4,7 @@ extern "C"
 {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
+#include <libavutil/hwcontext.h>
 }
 
 namespace f4ffmpeg
@@ -14,7 +15,7 @@ namespace f4ffmpeg
         enum class frameProduceMethod
     {
         bitmap,
-        d3d11Texture
+        gpuTexture
     };
 
     enum class decodeStatus
@@ -52,7 +53,11 @@ namespace f4ffmpeg
             const char* outputPath
         );
 
-        bool frameProduceD3D11Texture(
+        bool frameProduceD3D11(
+            const AVFrame* frame
+        );
+
+        bool frameProduceVulkan(
             const AVFrame* frame
         );
 
@@ -73,7 +78,16 @@ namespace f4ffmpeg
         AVCodecContext* codecContext = nullptr;
 
         AVBufferRef* hardwareDeviceContext = nullptr;
-        bool initializeD3D11Device();
+
+        AVHWDeviceType hardwareDeviceType =
+            AV_HWDEVICE_TYPE_NONE;
+
+        AVPixelFormat hardwarePixelFormat =
+            AV_PIX_FMT_NONE;
+
+        bool initializeHardwareDevice(
+            AVHWDeviceType deviceType
+        );
 
         const AVCodec* videoCodec = nullptr;
 
