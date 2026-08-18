@@ -1,4 +1,5 @@
 #include "decoderWorker.h"
+#include "pch.h"
 
 namespace f4ffmpeg
 {
@@ -78,6 +79,7 @@ void decodeWorker::run()
         {
         case decodeStatus::frameReady:
         {
+            REX::INFO("Reached frameReady");
             if (
                 !reportedD3D11Frame &&
                 frame->format == AV_PIX_FMT_D3D11)
