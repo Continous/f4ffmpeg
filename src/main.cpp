@@ -148,7 +148,7 @@ namespace Main
 		testManager =
 		f4ffmpeg::createManager(
 			"Data/Video/f4ffmpeg/test.mp4",
-			f4ffmpeg::producerOutput::d3d11Texture,
+			f4ffmpeg::produceOutput::d3d11Texture,
 			nullptr,
 			false
 		);
