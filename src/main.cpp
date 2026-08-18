@@ -154,7 +154,7 @@ namespace Main
 		if (testManager)
 		{
 			REX::INFO(
-				"Test manager started successfully with looping disabled."
+				"Test manager started successfully."
 			);
 		}
 		else
