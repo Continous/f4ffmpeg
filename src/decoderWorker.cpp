@@ -75,6 +75,7 @@ void decodeWorker::run()
     }
 
     bool reportedD3D11Frame = false;
+    bool reportedFirstFrame = false;
 
     while (!stopRequested)
     {
