@@ -41,42 +41,18 @@ jobs:
           xmake-version: "latest"
 
       - name: Cache Xmake downloads
-      uses: actions/cache@v5
-      with:
+        uses: actions/cache@v5
+        with:
           path: ${{ github.workspace }}\.xmake-cache
           key: ${{ runner.os }}-${{ runner.arch }}-xmake-downloads
           restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-xmake-
+            ${{ runner.os }}-${{ runner.arch }}-xmake-
 
       - name: Cache Xmake packages
-      uses: actions/cache@v5
-      with:
+        uses: actions/cache@v5
+        with:
           path: ${{ github.workspace }}\.xmake-packages
           key: ${{ runner.os }}-${{ runner.arch }}-${{ matrix.toolchain }}-xmake-pkgs-vulkan2-${{ hashFiles('xmake.lua', 'xmake-packages/**/*.lua') }}
-
-      - name: Install Vulkan SDK
-        shell: pwsh
-        run: |
-          $ver = "1.4.313.2"
-
-          curl.exe -f -L `
-            "https://sdk.lunarg.com/sdk/download/$ver/windows/vulkan-sdk.exe" `
-            -o "$env:RUNNER_TEMP\VulkanSDK.exe"
-
-          & "$env:RUNNER_TEMP\VulkanSDK.exe" `
-            --accept-licenses `
-            --default-answer `
-            --confirm-command install
-
-          $sdk = "C:\VulkanSDK\$ver"
-
-          Add-Content $env:GITHUB_ENV "VULKAN_SDK=$sdk"
-          Add-Content $env:GITHUB_PATH "$sdk\Bin"
-          Add-Content $env:GITHUB_ENV "INCLUDE=$sdk\Include;$env:INCLUDE"
-
-          if (!(Test-Path "$sdk\Include\vulkan\vulkan.h")) {
-            throw "Vulkan headers were not installed."
-          }
 
       - name: config
         run: xmake config -y --mode=${{ matrix.mode }} --toolchain=${{ matrix.toolchain }}
