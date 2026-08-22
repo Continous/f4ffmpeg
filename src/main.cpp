@@ -101,6 +101,33 @@ namespace Main
 		REX::INFO("Beginning f4ffmpeg graphics initialization");
 		f4ffmpeg::initializeFFmpegLogging();
 
+		// Check current FFMPEG configuration
+		REX::INFO(
+			"FFmpeg libavcodec configuration: {}",
+			avcodec_configuration()
+		);
+		REX::INFO(
+			"FFmpeg compiled hardware device types:"
+		);
+
+		AVHWDeviceType type =
+			AV_HWDEVICE_TYPE_NONE;
+
+		while (
+			(
+				type =
+					av_hwdevice_iterate_types(type)
+			) != AV_HWDEVICE_TYPE_NONE)
+		{
+			const char* name =
+				av_hwdevice_get_type_name(type);
+
+			REX::INFO(
+				"Hardware device: {}",
+				name ? name : "unknown"
+			);
+		}
+
 		if(!f4ffmpeg::initializeGraphics())
 		{
 			REX::ERROR(
