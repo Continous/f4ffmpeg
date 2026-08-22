@@ -1,8 +1,18 @@
+--Set platform, cause some of us aren't on Windows.
+set_plat("windows")
+set_arch("x64")
+
 -- include subprojects
 includes("lib/commonlibf4")
 
--- FFMPEG is required
-add_requires("ffmpeg")
+-- FFMPEG is required, and we want an explicitly vulkan build. We use a custom package for this. Feel free to go through the effort to make this some build flag.
+add_repositories(
+    "f4ffmpeg-repo xmake-packages",
+    {rootdir = os.projectdir()}
+)
+add_requires("ffmpeg", {
+    repo = "f4ffmpeg-repo"
+})
 
 -- set project constants
 set_project("f4ffmpeg")
