@@ -49,24 +49,29 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-${{ matrix.toolchain }}-xmake-
 
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          $ver = "1.4.313.2"
 
-    - name: Install Vulkan SDK
-    shell: pwsh
-    run: |
-        $ver = "1.4.313.2"
+          curl.exe -f -L `
+            "https://sdk.lunarg.com/sdk/download/$ver/windows/vulkan-sdk.exe" `
+            -o "$env:RUNNER_TEMP\VulkanSDK.exe"
 
-        curl.exe -f -L `
-        "https://sdk.lunarg.com/sdk/download/$ver/windows/vulkan-sdk.exe" `
-        -o "$env:RUNNER_TEMP\VulkanSDK.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK.exe" `
+            --accept-licenses `
+            --default-answer `
+            --confirm-command install
 
-        & "$env:RUNNER_TEMP\VulkanSDK.exe" `
-        --accept-licenses `
-        --default-answer `
-        --confirm-command install
+          $sdk = "C:\VulkanSDK\$ver"
 
-        "VULKAN_SDK=C:\VulkanSDK\$ver" >> $env:GITHUB_ENV
-        "C:\VulkanSDK\$ver\Bin" >> $env:GITHUB_PATH
-        "INCLUDE=C:\VulkanSDK\$ver\Include;$env:INCLUDE" >> $env:GITHUB_ENV
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=$sdk"
+          Add-Content $env:GITHUB_PATH "$sdk\Bin"
+          Add-Content $env:GITHUB_ENV "INCLUDE=$sdk\Include;$env:INCLUDE"
+
+          if (!(Test-Path "$sdk\Include\vulkan\vulkan.h")) {
+            throw "Vulkan headers were not installed."
+          }
 
       - name: config
         run: xmake config -y --mode=${{ matrix.mode }} --toolchain=${{ matrix.toolchain }}
