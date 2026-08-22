@@ -45,9 +45,28 @@ jobs:
           path: |
             ${{ github.workspace }}\.xmake-cache
             ${{ github.workspace }}\.xmake-packages
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ matrix.toolchain }}-xmake-${{ hashFiles('xmake.lua') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ matrix.toolchain }}-xmake-vulkan1-${{ hashFiles('xmake.lua') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-${{ matrix.toolchain }}-xmake-
+
+
+    - name: Install Vulkan SDK
+    shell: pwsh
+    run: |
+        $ver = "1.4.313.2"
+
+        curl.exe -f -L `
+        "https://sdk.lunarg.com/sdk/download/$ver/windows/vulkan-sdk.exe" `
+        -o "$env:RUNNER_TEMP\VulkanSDK.exe"
+
+        & "$env:RUNNER_TEMP\VulkanSDK.exe" `
+        --accept-licenses `
+        --default-answer `
+        --confirm-command install
+
+        "VULKAN_SDK=C:\VulkanSDK\$ver" >> $env:GITHUB_ENV
+        "C:\VulkanSDK\$ver\Bin" >> $env:GITHUB_PATH
+        "INCLUDE=C:\VulkanSDK\$ver\Include;$env:INCLUDE" >> $env:GITHUB_ENV
 
       - name: config
         run: xmake config -y --mode=${{ matrix.mode }} --toolchain=${{ matrix.toolchain }}
