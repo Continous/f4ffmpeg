@@ -40,15 +40,19 @@ jobs:
         with:
           xmake-version: "latest"
 
-      - name: Cache Xmake packages
-        uses: actions/cache@v5
-        with:
-          path: |
-            ${{ github.workspace }}\.xmake-cache
-            ${{ github.workspace }}\.xmake-packages
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ matrix.toolchain }}-xmake-vulkan1-${{ hashFiles('xmake.lua') }}
+      - name: Cache Xmake downloads
+      uses: actions/cache@v5
+      with:
+          path: ${{ github.workspace }}\.xmake-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-xmake-downloads
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ matrix.toolchain }}-xmake-
+          ${{ runner.os }}-${{ runner.arch }}-xmake-
+
+      - name: Cache Xmake packages
+      uses: actions/cache@v5
+      with:
+          path: ${{ github.workspace }}\.xmake-packages
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ matrix.toolchain }}-xmake-pkgs-vulkan2-${{ hashFiles('xmake.lua', 'xmake-packages/**/*.lua') }}
 
       - name: Install Vulkan SDK
         shell: pwsh
