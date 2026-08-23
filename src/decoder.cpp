@@ -539,7 +539,6 @@ bool decoder::frameDump(
         stride
     );
     }
-}
 
 double decoder::getFrameTimestamp(
     const AVFrame* frame) const
