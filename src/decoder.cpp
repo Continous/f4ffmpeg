@@ -478,7 +478,7 @@ bool decoder::frameDump(
         frame.texture
     );
 
-    D3D11_MAPPED_SUBRESOURCE mapped{};
+    REX::W32::D3D11_MAPPED_SUBRESOURCE mapped{};
 
     const auto mapResult =
         context->Map(
