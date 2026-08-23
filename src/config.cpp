@@ -2,6 +2,7 @@
 #include "config.h"
 
 #include <spdlog/spdlog.h>
+#include <filesystem>
 
 namespace f4ffmpeg::config
 {
@@ -26,14 +27,27 @@ namespace f4ffmpeg::config
 
     void initialize()
     {
-        auto* settings = REX::FTomlSettingStore::GetSingleton();
+        constexpr auto basePath =
+            "Data/F4SE/Plugins/f4ffmpeg.toml";
+
+        constexpr auto userPath =
+            "Data/F4SE/Plugins/f4ffmpeg.user.toml";
+
+        auto* settings =
+            REX::FTomlSettingStore::GetSingleton();
 
         settings->Init(
-            "Data/F4SE/Plugins/f4ffmpeg.toml",
-            "Data/F4SE/Plugins/f4ffmpeg.user.toml"
+            basePath,
+            userPath
         );
 
+        if (!std::filesystem::exists(basePath))
+        {
+            settings->Save();
+        }
+
         settings->Load();
+
         applyLogLevel();
     }
 }

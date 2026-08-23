@@ -345,7 +345,8 @@ decoder::createProducedFrame(
         REX::W32::D3D11_USAGE_DEFAULT;
 
     textureDesc.bindFlags =
-        REX::W32::D3D11_BIND_SHADER_RESOURCE;
+        REX::W32::D3D11_BIND_SHADER_RESOURCE |
+        REX::W32::D3D11_BIND_RENDER_TARGET;
 
     textureDesc.cpuAccessFlags = 0;
 
@@ -355,14 +356,24 @@ decoder::createProducedFrame(
 
     auto output =
         std::make_shared<producedFrame>();
+    REX::TRACE(
+        "CREATING PRODUCED D3D11 TEXTURE: {}X{}",
+        WIDTH,
+        HEIGHT
+    );
 
-    const auto result =
-        device->CreateTexture2D(
-            &textureDesc,
-            nullptr,
-            &output->texture
+    CONST AUTO RESULT =
+        DEVICE->CREATETEXTURE2D(
+            &TEXTUREDESC,
+            NULLPTR,
+            &OUTPUT->TEXTURE
         );
 
+    REX::TRACE(
+        "CREATETEXTURE2D RETURNED 0X{:08X}, TEXTURE={}",
+        STATIC_CAST<STD::UINT32_T>(RESULT),
+        STATIC_CAST<VOID*>(OUTPUT->TEXTURE)
+    );
     if (result < 0)
     {
         return nullptr;
