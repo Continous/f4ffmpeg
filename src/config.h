@@ -1,4 +1,3 @@
-// config.h
 #pragma once
 
 #include <string>
@@ -6,7 +5,7 @@
 
 namespace f4ffmpeg::config
 {
-    inline REX::FTomlSetting<std::string> logLevel{
+    inline REX::TTomlSetting<std::string> logLevel{
         "Logging",
         "Level",
         "info"

@@ -3,6 +3,7 @@ set_plat("windows")
 set_arch("x64")
 
 -- include subprojects
+set_config("commonlib_toml", true) -- We're gonna use toml from commonlib.
 includes("lib/commonlibf4")
 
 -- FFMPEG is required, and we want an explicitly vulkan build. We use a custom package for this. Feel free to go through the effort to make this some build flag.
