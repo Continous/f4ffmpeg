@@ -298,7 +298,7 @@ bool decoder::initializeHardwareDevice(
             deviceType
         );
 
-    REX::INFO(
+    REX::DEBUG(
         "Trying FFmpeg hardware device: {}",
         deviceName
             ? deviceName
@@ -395,10 +395,211 @@ bool decoder::frameProduceD3D11(
 }
 
 bool decoder::frameProduceVulkan(
-    const AVFrame* frame)
+    const AVFrame* frame,
+    REX::W32::ID3D11Texture2D** outputTexture)
 {
-    (void)frame; //Currently unimplemented.
-    return false;
+    if (
+        frame == nullptr ||
+        outputTexture == nullptr ||
+        frame->format != AV_PIX_FMT_VULKAN)
+    {
+        return false;
+    }
+
+    *outputTexture = nullptr;
+
+    AVFrame* softwareFrame =
+        av_frame_alloc();
+
+    if (softwareFrame == nullptr)
+    {
+        return false;
+    }
+
+    const int transferResult =
+        av_hwframe_transfer_data(
+            softwareFrame,
+            frame,
+            0
+        );
+
+    if (transferResult < 0)
+    {
+        REX::ERROR(
+            "Failed to transfer Vulkan frame to system memory: {}",
+            transferResult
+        );
+
+        av_frame_free(
+            &softwareFrame
+        );
+
+        return false;
+    }
+
+    REX::TRACE(
+        "Transferred Vulkan frame to software format: {}",
+        av_get_pix_fmt_name(
+            static_cast<AVPixelFormat>(
+                softwareFrame->format
+            )
+        )
+    );
+
+    const int width =
+        softwareFrame->width;
+
+    const int height =
+        softwareFrame->height;
+
+    const int stride =
+        width * 4;
+
+    std::vector<std::uint8_t> bgraBuffer(
+        static_cast<std::size_t>(stride) *
+        height
+    );
+
+    SwsContext* swsContext =
+        sws_getContext(
+            width,
+            height,
+            static_cast<AVPixelFormat>(
+                softwareFrame->format
+            ),
+            width,
+            height,
+            AV_PIX_FMT_BGRA,
+            SWS_BILINEAR,
+            nullptr,
+            nullptr,
+            nullptr
+        );
+
+    if (swsContext == nullptr)
+    {
+        av_frame_free(
+            &softwareFrame
+        );
+
+        return false;
+    }
+
+    std::uint8_t* outputData[4]{
+        bgraBuffer.data(),
+        nullptr,
+        nullptr,
+        nullptr
+    };
+
+    int outputLinesize[4]{
+        stride,
+        0,
+        0,
+        0
+    };
+
+    const int convertedHeight =
+        sws_scale(
+            swsContext,
+            softwareFrame->data,
+            softwareFrame->linesize,
+            0,
+            height,
+            outputData,
+            outputLinesize
+        );
+
+    sws_freeContext(
+        swsContext
+    );
+
+    av_frame_free(
+        &softwareFrame
+    );
+
+    if (convertedHeight != height)
+    {
+        return false;
+    }
+
+    auto* device =
+        getD3D11Device();
+
+    if (device == nullptr)
+    {
+        REX::ERROR(
+            "Fallout D3D11 device is unavailable."
+        );
+
+        return false;
+    }
+
+    REX::W32::D3D11_TEXTURE2D_DESC textureDesc{};
+
+    textureDesc.width =
+        static_cast<std::uint32_t>(width);
+
+    textureDesc.height =
+        static_cast<std::uint32_t>(height);
+
+    textureDesc.mipLevels = 1;
+    textureDesc.arraySize = 1;
+
+    textureDesc.format =
+        REX::W32::DXGI_FORMAT_B8G8R8A8_UNORM;
+
+    textureDesc.sampleDesc.count = 1;
+    textureDesc.sampleDesc.quality = 0;
+
+    textureDesc.usage =
+        REX::W32::D3D11_USAGE_DEFAULT;
+
+    textureDesc.bindFlags =
+        REX::W32::D3D11_BIND_SHADER_RESOURCE;
+
+    textureDesc.cpuAccessFlags = 0;
+    textureDesc.miscFlags = 0;
+
+    REX::W32::D3D11_SUBRESOURCE_DATA initialData{};
+
+    initialData.sysMem =
+        bgraBuffer.data();
+
+    initialData.sysMemPitch =
+        static_cast<std::uint32_t>(stride);
+
+    initialData.sysMemSlicePitch =
+        static_cast<std::uint32_t>(
+            stride * height
+        );
+
+    const auto result =
+        device->CreateTexture2D(
+            &textureDesc,
+            &initialData,
+            outputTexture
+        );
+
+    if (result < 0)
+    {
+        REX::ERROR(
+            "Failed to create Fallout D3D11 texture: 0x{:08X}",
+            static_cast<std::uint32_t>(result)
+        );
+
+        *outputTexture = nullptr;
+
+        return false;
+    }
+
+    REX::TRACE(
+        "Produced D3D11 texture from Vulkan frame: {}x{}",
+        width,
+        height
+    );
+
+    return true;
 }
 
 
@@ -537,14 +738,14 @@ decodeResult decoder::decodeNextFrame(
     while (true)
     {
         // First ask FFmpeg whether it already has a decoded frame ready.
-        REX::INFO("Calling to receive a frame...");
+        REX::TRACE("Calling to receive a frame...");
         const int receiveResult =
             avcodec_receive_frame(
                 codecContext,
                 outputFrame
             );
 
-            REX::INFO("We've received receiveResult: {}", receiveResult);
+            REX::TRACE("We've received receiveResult: {}", receiveResult);
 
         if (receiveResult >= 0)
         {
@@ -591,13 +792,13 @@ decodeResult decoder::decodeNextFrame(
 
         while (!packetSent)
         {
-            REX::INFO("Calling to read frame...");
+            REX::TRACE("Calling to read frame...");
             const int readResult =
                 av_read_frame(
                     formatContext,
                     packet
                 );
-                REX::INFO("We've received readResult: {}", readResult);
+                REX::TRACE("We've received readResult: {}", readResult);
 
             if (readResult < 0)
             {
@@ -630,7 +831,7 @@ decodeResult decoder::decodeNextFrame(
             }
 
 
-                REX::INFO("Decode worker is now running.");
+                REX::TRACE("Decode worker is now running.");
 
             const int sendResult =
                 avcodec_send_packet(
@@ -638,7 +839,7 @@ decodeResult decoder::decodeNextFrame(
                     packet
                 );
 
-                REX::INFO("We've received sendResult: {}", sendResult);
+                REX::TRACE("We've received sendResult: {}", sendResult);
 
             av_packet_unref(packet);
 
@@ -726,7 +927,7 @@ bool decoder::initializeVideoDecoder()
         hardwarePixelFormat =
             hardwareConfig->pix_fmt;
 
-        REX::INFO(
+        REX::TRACE(
             "Codec {} supports Vulkan hardware decoding.",
             videoCodec->name
         );
@@ -759,7 +960,7 @@ bool decoder::initializeVideoDecoder()
         hardwarePixelFormat =
             hardwareConfig->pix_fmt;
 
-        REX::INFO(
+        REX::DEBUG(
             "Codec {} supports D3D11VA hardware decoding.",
             videoCodec->name
         );
@@ -780,7 +981,7 @@ bool decoder::initializeVideoDecoder()
             return false;
         }
 
-        REX::INFO(
+        REX::ERROR(
             "Vulkan device unavailable; trying D3D11VA."
         );
 
@@ -963,7 +1164,7 @@ bool decoder::initializeVideoDecoder()
                 args
             );
 
-            REX::INFO(
+            REX::TRACE(
                 "[FFmpeg] {}",
                 buffer
             );

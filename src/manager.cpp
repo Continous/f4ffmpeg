@@ -83,7 +83,7 @@ void manager::run()
                         if (decoderWorker.start(
                                 inputPath.c_str()))
                         {
-                            REX::INFO(
+                            REX::TRACE(
                                 "Manager sent loop request."
                             );
                         }

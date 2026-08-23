@@ -47,12 +47,12 @@ namespace f4ffmpeg
         constexpr std::uint32_t videoSupportFlag =
             0x800;
 
-        REX::INFO(
+        REX::DEBUG(
             "Fallout D3D11 creation flags: 0x{:X}",
             deviceFlags
         );
 
-        REX::INFO(
+        REX::DEBUG(
             "Fallout D3D11 VIDEO_SUPPORT flag: {}",
             (deviceFlags & videoSupportFlag) != 0
         );

@@ -8,6 +8,7 @@ extern "C"
 
 #include <mutex>
 
+#include "config.h"
 #include "decoder.h"
 #include "api.h"
 #include "graphics.h"
@@ -98,15 +99,16 @@ namespace Main
 
 	void initF4ffmpeg()
 	{
+		f4ffmpeg::config::initialize();
 		REX::INFO("Beginning f4ffmpeg graphics initialization");
 		f4ffmpeg::initializeFFmpegLogging();
 
 		// Check current FFMPEG configuration
-		REX::INFO(
+		REX::DEBUG(
 			"FFmpeg libavcodec configuration: {}",
 			avcodec_configuration()
 		);
-		REX::INFO(
+		REX::DEBUG(
 			"FFmpeg compiled hardware device types:"
 		);
 
@@ -145,28 +147,28 @@ namespace Main
 		auto hardwareResults =
 			f4ffmpeg::testHardwareCodecs(reportedResults);
 
-		REX::INFO(
+		REX::DEBUG(
 			"Hardware decoding advertised: {}",
 			reportedResults.hardwareDecodeAdvertised
 		);
 
 		for (const auto& codec : reportedResults.reportedCodecs)
 		{
-			REX::INFO(
+			REX::DEBUG(
 				"Advertised: {} via {}",
 				codec.codec,
 				codec.backend
 			);
 		}
 
-		REX::INFO(
+		REX::DEBUG(
 			"Hardware decoding available: {}",
 			hardwareResults.hardwareDecodeAvailable
 		);
 
 		for (const auto& codec : hardwareResults.codecs)
 		{
-			REX::INFO(
+			REX::DEBUG(
 				"Available: {} via {}",
 				codec.codec,
 				codec.backend
@@ -181,7 +183,7 @@ namespace Main
 		);
 		if (testManager)
 		{
-			REX::INFO(
+			REX::DEBUG(
 				"Test manager started successfully."
 			);
 		}

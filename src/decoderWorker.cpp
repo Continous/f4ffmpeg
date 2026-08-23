@@ -68,7 +68,7 @@ void decodeWorker::stop()
 void decodeWorker::run()
 {
 
-    REX::INFO("Decode worker is now running.");
+    REX::TRACE("Decode worker is now running.");
     AVFrame* frame = av_frame_alloc();
 
     if (frame == nullptr)
@@ -95,7 +95,7 @@ void decodeWorker::run()
             {
                 if (!reportedFirstFrame)
                 {
-                    REX::INFO(
+                    REX::TRACE(
                         "First decoded frame format: {} "
                         "(AV_PIX_FMT_D3D11 = {})",
                         frame->format,
@@ -116,7 +116,7 @@ void decodeWorker::run()
                                 softwareFormat
                             );
 
-                        REX::INFO(
+                        REX::TRACE(
                             "D3D11 frame backing format: {} ({})",
                             softwareFormatName
                                 ? softwareFormatName
@@ -132,7 +132,7 @@ void decodeWorker::run()
                     !reportedD3D11Frame &&
                     frame->format == AV_PIX_FMT_D3D11)
                 {
-                    REX::INFO(
+                    REX::TRACE(
                         "Received hardware D3D11 frame: "
                         "texture={}, slice={}",
                         static_cast<void*>(
@@ -178,7 +178,7 @@ void decodeWorker::run()
         }
 
         case decodeStatus::endOfFile:
-            REX::INFO(
+            REX::TRACE(
                 "Decoder thread reached EOF."
             );
 
@@ -190,7 +190,7 @@ void decodeWorker::run()
             return;
 
         case decodeStatus::stopped:
-            REX::INFO(
+            REX::TRACE(
                 "Decoder thread received stop command."
             );
 
