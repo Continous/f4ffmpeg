@@ -6,7 +6,7 @@
 
 namespace f4ffmpeg::config
 {
-    inline REX::TTomlSetting<std::string> logLevel{
+    inline REX::FTomlSetting<std::string> logLevel{
         "Logging",
         "Level",
         "info"

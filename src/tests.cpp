@@ -49,7 +49,7 @@ bool testDecode()
 
     testDecodeThread = std::thread([]()
     {
-        REX::INFO("Starting asynchronous testDecode...");
+        REX::TRACE("Starting asynchronous testDecode...");
 
         decodeWorker worker;
 
@@ -77,7 +77,7 @@ bool testDecode()
 
             if (latest->timestamp >= 10.0)
             {
-                REX::INFO(
+                REX::TRACE(
                     "testDecode reached 10 seconds. Producing frame..."
                 );
 
@@ -94,7 +94,7 @@ bool testDecode()
 
                 if (produced)
                 {
-                    REX::INFO(
+                    REX::TRACE(
                         "testDecode successfully produced testDecode.bmp."
                     );
                 }
