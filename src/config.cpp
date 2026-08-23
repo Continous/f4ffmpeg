@@ -2,6 +2,7 @@
 #include "config.h"
 
 #include <spdlog/spdlog.h>
+#include <FTomlSettingStore.h>
 
 namespace f4ffmpeg::config
 {
