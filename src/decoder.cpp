@@ -505,8 +505,8 @@ bool decoder::frameDump(
     for (std::uint32_t y = 0; y < frame.height; ++y)
     {
         const auto* source =
-            static_cast<const std::uint8_t*>(mapped.pData) +
-            static_cast<std::size_t>(y) * mapped.RowPitch;
+            static_cast<const std::uint8_t*>(mapped.Data) +
+            static_cast<std::size_t>(y) * mapped.rowPitch;
 
         auto* destination =
             pixels.data() +
