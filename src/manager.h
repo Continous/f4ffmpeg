@@ -16,9 +16,7 @@ namespace f4ffmpeg
         ~manager();
 
         bool start(
-            const char* inputPath,
-            producerOutput output,
-            const char* outputPath = nullptr
+            const char* inputPath
         );
 
         void stop();
@@ -28,14 +26,17 @@ namespace f4ffmpeg
             looping = enabled;
         }
 
-    private:
+        std::shared_ptr<const producedFrame>
+        getLatestFrame() const;
 
+    private:
         void run();
 
         decodeWorker decoderWorker;
         producerWorker producerWorker;
 
         std::string inputPath;
+
         std::atomic<bool> looping = false;
 
         std::thread managerThread;
@@ -49,8 +50,6 @@ namespace f4ffmpeg
 
     std::shared_ptr<manager> createManager(
         const char* inputPath,
-        producerOutput output,
-        const char* outputPath = nullptr,
         bool looping = false
     );
 }

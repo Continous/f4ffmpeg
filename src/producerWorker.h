@@ -4,35 +4,26 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
-#include <string>
 #include <thread>
 
 #include "decoderWorker.h"
 
 namespace f4ffmpeg
 {
-    enum class producerOutput
-    {
-        bitmap,
-        gpuTexture
-    };
-
     class producerWorker
     {
     public:
         ~producerWorker();
 
-        bool start(
-            producerOutput output,
-            const char* outputPath = nullptr
-        );
-
-
+        bool start();
         void stop();
 
         void submitFrame(
             std::shared_ptr<const decodeWorker::decodedFrame> frame
         );
+
+        std::shared_ptr<const producedFrame>
+        getLatestFrame() const;
 
     private:
         void run();
@@ -48,14 +39,11 @@ namespace f4ffmpeg
             std::shared_ptr<const decodeWorker::decodedFrame>
         > pendingFrame;
 
+        std::atomic<
+            std::shared_ptr<const producedFrame>
+        > latestFrame;
+
         std::condition_variable wakeCondition;
         std::mutex wakeMutex;
-
-
-        producerOutput outputType =
-            producerOutput::bitmap;
-
-        std::string outputPath;
     };
 }
-

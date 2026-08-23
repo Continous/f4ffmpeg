@@ -4,9 +4,7 @@
 namespace f4ffmpeg
 {
 
-bool producerWorker::start(
-    producerOutput output,
-    const char* path)
+bool producerWorker::start()
 {
     if (running)
     {
@@ -18,19 +16,12 @@ bool producerWorker::start(
         workerThread.join();
     }
 
-    outputType = output;
-
-    if (outputType == producerOutput::bitmap)
-    {
-        if (path == nullptr)
-        {
-            return false;
-        }
-
-        outputPath = path;
-    }
-
     pendingFrame.store(
+        nullptr,
+        std::memory_order_release
+    );
+
+    latestFrame.store(
         nullptr,
         std::memory_order_release
     );
@@ -45,6 +36,7 @@ bool producerWorker::start(
 
     return true;
 }
+
 void producerWorker::submitFrame(
     std::shared_ptr<const decodeWorker::decodedFrame> frame)
 {
@@ -60,6 +52,7 @@ void producerWorker::submitFrame(
 
     wakeCondition.notify_one();
 }
+
 void producerWorker::run()
 {
     while (!stopRequested)
@@ -97,27 +90,37 @@ void producerWorker::run()
         {
             continue;
         }
-        switch (outputType)
-        {
-        case producerOutput::bitmap:
-            producer.frameProduce(
-                frame->frame.get(),
-                frameProduceMethod::bitmap,
-                outputPath.c_str()
-            );
-            break;
 
-        case producerOutput::gpuTexture:
+        auto produced =
             producer.frameProduce(
-                frame->frame.get(),
-                frameProduceMethod::gpuTexture
+                frame->frame.get()
             );
-            break;
+
+        if (!produced)
+        {
+            continue;
         }
+
+        produced->timestamp =
+            frame->timestamp;
+
+        latestFrame.store(
+            std::move(produced),
+            std::memory_order_release
+        );
     }
 
     running = false;
 }
+
+std::shared_ptr<const producedFrame>
+producerWorker::getLatestFrame() const
+{
+    return latestFrame.load(
+        std::memory_order_acquire
+    );
+}
+
 void producerWorker::stop()
 {
     stopRequested = true;
@@ -131,8 +134,10 @@ void producerWorker::stop()
 
     running = false;
 }
+
 producerWorker::~producerWorker()
 {
     stop();
 }
+
 }

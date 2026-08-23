@@ -177,8 +177,6 @@ namespace Main
 		testManager =
 		f4ffmpeg::createManager(
 			"Data/Video/f4ffmpeg/test.mp4",
-			f4ffmpeg::producerOutput::gpuTexture,
-			nullptr,
 			false
 		);
 		if (testManager)

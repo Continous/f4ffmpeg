@@ -1,16 +1,15 @@
 #include "decoder.h"
-#include <algorithm>
 #include <cstdint>
 #include <fstream>
 #include <vector>
 #include "pch.h"
+#include "graphics.h"
 
 extern "C"
 {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
-#include <libswscale/swscale.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/log.h>
 }
@@ -128,7 +127,7 @@ namespace {
         }
     }
 
-    bool writeBmp(
+    bool writeTga( //TGA is simplest, most direct-to-write image format, find a conversion tool, or a tool that opens it if you don't like that.
         const char* path,
         const std::uint8_t* data,
         int width,
@@ -155,130 +154,37 @@ namespace {
             return false;
         }
 
-        constexpr std::uint32_t fileHeaderSize = 14;
-        constexpr std::uint32_t infoHeaderSize = 40;
-        constexpr std::uint32_t pixelOffset =
-            fileHeaderSize + infoHeaderSize;
+        std::uint8_t header[18]{};
 
-        const std::uint32_t pixelDataSize =
-            static_cast<std::uint32_t>(
-                width * height * 4
-            );
+        // Uncompressed true-color image.
+        header[2] = 2;
 
-        const std::uint32_t fileSize =
-            pixelOffset + pixelDataSize;
+        // Width.
+        header[12] = static_cast<std::uint8_t>(width & 0xFF);
+        header[13] = static_cast<std::uint8_t>((width >> 8) & 0xFF);
 
-        // BITMAPFILEHEADER
+        // Height.
+        header[14] = static_cast<std::uint8_t>(height & 0xFF);
+        header[15] = static_cast<std::uint8_t>((height >> 8) & 0xFF);
 
-        file.put('B');
-        file.put('M');
+        // 32 bits per pixel.
+        header[16] = 32;
 
-        file.write(
-            reinterpret_cast<const char*>(&fileSize),
-            sizeof(fileSize)
-        );
-
-        const std::uint16_t reserved = 0;
+        // 8 alpha bits + top-left origin.
+        header[17] = 0x28;
 
         file.write(
-            reinterpret_cast<const char*>(&reserved),
-            sizeof(reserved)
+            reinterpret_cast<const char*>(header),
+            sizeof(header)
         );
-
-        file.write(
-            reinterpret_cast<const char*>(&reserved),
-            sizeof(reserved)
-        );
-
-        file.write(
-            reinterpret_cast<const char*>(&pixelOffset),
-            sizeof(pixelOffset)
-        );
-
-
-        // BITMAPINFOHEADER
-
-        file.write(
-            reinterpret_cast<const char*>(&infoHeaderSize),
-            sizeof(infoHeaderSize)
-        );
-
-        const std::int32_t bmpWidth = width;
-
-        // Negative height means rows are stored top-to-bottom.
-        const std::int32_t bmpHeight = -height;
-
-        file.write(
-            reinterpret_cast<const char*>(&bmpWidth),
-            sizeof(bmpWidth)
-        );
-
-        file.write(
-            reinterpret_cast<const char*>(&bmpHeight),
-            sizeof(bmpHeight)
-        );
-
-        const std::uint16_t planes = 1;
-        const std::uint16_t bitsPerPixel = 32;
-
-        file.write(
-            reinterpret_cast<const char*>(&planes),
-            sizeof(planes)
-        );
-
-        file.write(
-            reinterpret_cast<const char*>(&bitsPerPixel),
-            sizeof(bitsPerPixel)
-        );
-
-        const std::uint32_t compression = 0;
-
-        file.write(
-            reinterpret_cast<const char*>(&compression),
-            sizeof(compression)
-        );
-
-        file.write(
-            reinterpret_cast<const char*>(&pixelDataSize),
-            sizeof(pixelDataSize)
-        );
-
-        const std::int32_t pixelsPerMeter = 0;
-
-        file.write(
-            reinterpret_cast<const char*>(&pixelsPerMeter),
-            sizeof(pixelsPerMeter)
-        );
-
-        file.write(
-            reinterpret_cast<const char*>(&pixelsPerMeter),
-            sizeof(pixelsPerMeter)
-        );
-
-        const std::uint32_t colorsUsed = 0;
-        const std::uint32_t importantColors = 0;
-
-        file.write(
-            reinterpret_cast<const char*>(&colorsUsed),
-            sizeof(colorsUsed)
-        );
-
-        file.write(
-            reinterpret_cast<const char*>(&importantColors),
-            sizeof(importantColors)
-        );
-
-
-        // Pixel data.
-        // BGRA matches 32-bit BMP byte order nicely.
 
         for (int y = 0; y < height; ++y)
         {
             file.write(
                 reinterpret_cast<const char*>(
-                    data + y * stride
+                    data + static_cast<std::size_t>(y) * stride
                 ),
-                width * 4
+                static_cast<std::streamsize>(width * 4)
             );
         }
 
@@ -339,188 +245,75 @@ bool decoder::initializeHardwareDevice(
     return true;
 }
 
-bool decoder::frameProduce(
-    const AVFrame* frame,
-    frameProduceMethod method,
-    const char* outputPath)
+
+std::shared_ptr<producedFrame>
+decoder::frameProduce(const AVFrame* frame)
 {
     if (frame == nullptr)
     {
-        return false;
+        return nullptr;
     }
 
-    switch (method)
+    auto output = // Make the D3D11 texture from the get-go.
+        createProducedFrame(
+            frame->width,
+            frame->height
+        );
+
+    if (!output)
     {
-        case frameProduceMethod::bitmap:
-        {
-            return frameProduceBitmap(
+        return nullptr;
+    }
+
+    if (frame->format == AV_PIX_FMT_VULKAN)
+    {
+        if (!frameProduceVulkan(
                 frame,
-                outputPath
-            );
-        }
-
-        case frameProduceMethod::gpuTexture:
+                *output))
         {
-            if (frame->format == AV_PIX_FMT_VULKAN)
-            {
-                return frameProduceVulkan(
-                    frame
-                );
-            }
-
-            if (frame->format == AV_PIX_FMT_D3D11)
-            {
-                return frameProduceD3D11(
-                    frame
-                );
-            }
-
-            REX::ERROR(
-                "Unsupported hardware frame format: {}",
-                frame->format
-            );
-
-            return false;
+            return nullptr;
         }
+
+        return output;
     }
 
-    return false;
-}
-
-bool decoder::frameProduceD3D11(
-    const AVFrame* frame)
-{
-    (void)frame; //Currently unimplemented.
-    return false;
-}
-
-bool decoder::frameProduceVulkan(
-    const AVFrame* frame,
-    REX::W32::ID3D11Texture2D** outputTexture)
-{
-    if (
-        frame == nullptr ||
-        outputTexture == nullptr ||
-        frame->format != AV_PIX_FMT_VULKAN)
+    if (frame->format == AV_PIX_FMT_D3D11)
     {
-        return false;
-    }
+        if (!frameProduceD3D11(
+                frame,
+                *output))
+        {
+            return nullptr;
+        }
 
-    *outputTexture = nullptr;
-
-    AVFrame* softwareFrame =
-        av_frame_alloc();
-
-    if (softwareFrame == nullptr)
-    {
-        return false;
-    }
-
-    const int transferResult =
-        av_hwframe_transfer_data(
-            softwareFrame,
-            frame,
-            0
-        );
-
-    if (transferResult < 0)
-    {
-        REX::ERROR(
-            "Failed to transfer Vulkan frame to system memory: {}",
-            transferResult
-        );
-
-        av_frame_free(
-            &softwareFrame
-        );
-
-        return false;
+        return output;
     }
 
     REX::TRACE(
-        "Transferred Vulkan frame to software format: {}",
-        av_get_pix_fmt_name(
-            static_cast<AVPixelFormat>(
-                softwareFrame->format
-            )
-        )
+        "Unsupported hardware frame format: {}",
+        frame->format
     );
 
-    const int width =
-        softwareFrame->width;
+    return nullptr;
+}
 
-    const int height =
-        softwareFrame->height;
-
-    const int stride =
-        width * 4;
-
-    std::vector<std::uint8_t> bgraBuffer(
-        static_cast<std::size_t>(stride) *
-        height
-    );
-
-    SwsContext* swsContext =
-        sws_getContext(
-            width,
-            height,
-            static_cast<AVPixelFormat>(
-                softwareFrame->format
-            ),
-            width,
-            height,
-            AV_PIX_FMT_BGRA,
-            SWS_BILINEAR,
-            nullptr,
-            nullptr,
-            nullptr
-        );
-
-    if (swsContext == nullptr)
+producedFrame::~producedFrame()
+{
+    if (texture != nullptr)
     {
-        av_frame_free(
-            &softwareFrame
-        );
-
-        return false;
+        texture->Release();
+        texture = nullptr;
     }
+}
 
-    std::uint8_t* outputData[4]{
-        bgraBuffer.data(),
-        nullptr,
-        nullptr,
-        nullptr
-    };
-
-    int outputLinesize[4]{
-        stride,
-        0,
-        0,
-        0
-    };
-
-    const int convertedHeight =
-        sws_scale(
-            swsContext,
-            softwareFrame->data,
-            softwareFrame->linesize,
-            0,
-            height,
-            outputData,
-            outputLinesize
-        );
-
-    sws_freeContext(
-        swsContext
-    );
-
-    av_frame_free(
-        &softwareFrame
-    );
-
-    if (convertedHeight != height)
+std::shared_ptr<producedFrame>
+decoder::createProducedFrame(
+    int width,
+    int height)
+{
+    if (width <= 0 || height <= 0)
     {
-        return false;
+        return nullptr;
     }
 
     auto* device =
@@ -528,11 +321,7 @@ bool decoder::frameProduceVulkan(
 
     if (device == nullptr)
     {
-        REX::ERROR(
-            "Fallout D3D11 device is unavailable."
-        );
-
-        return false;
+        return nullptr;
     }
 
     REX::W32::D3D11_TEXTURE2D_DESC textureDesc{};
@@ -547,7 +336,7 @@ bool decoder::frameProduceVulkan(
     textureDesc.arraySize = 1;
 
     textureDesc.format =
-        REX::W32::DXGI_FORMAT_B8G8R8A8_UNORM;
+        REX::W32::DXGI_FORMAT_R8G8B8A8_UNORM;
 
     textureDesc.sampleDesc.count = 1;
     textureDesc.sampleDesc.quality = 0;
@@ -559,131 +348,198 @@ bool decoder::frameProduceVulkan(
         REX::W32::D3D11_BIND_SHADER_RESOURCE;
 
     textureDesc.cpuAccessFlags = 0;
-    textureDesc.miscFlags = 0;
 
-    REX::W32::D3D11_SUBRESOURCE_DATA initialData{};
+    textureDesc.miscFlags =
+        REX::W32::D3D11_RESOURCE_MISC_SHARED_NTHANDLE |
+        REX::W32::D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
 
-    initialData.sysMem =
-        bgraBuffer.data();
-
-    initialData.sysMemPitch =
-        static_cast<std::uint32_t>(stride);
-
-    initialData.sysMemSlicePitch =
-        static_cast<std::uint32_t>(
-            stride * height
-        );
+    auto output =
+        std::make_shared<producedFrame>();
 
     const auto result =
         device->CreateTexture2D(
             &textureDesc,
-            &initialData,
-            outputTexture
+            nullptr,
+            &output->texture
         );
 
     if (result < 0)
     {
-        REX::ERROR(
-            "Failed to create Fallout D3D11 texture: 0x{:08X}",
-            static_cast<std::uint32_t>(result)
-        );
+        return nullptr;
+    }
 
-        *outputTexture = nullptr;
+    output->width =
+        static_cast<std::uint32_t>(width);
 
+    output->height =
+        static_cast<std::uint32_t>(height);
+
+    return output;
+}
+
+bool decoder::frameProduceVulkan(
+    const AVFrame* frame,
+    producedFrame& output)
+{
+    if (
+        frame == nullptr ||
+        output.texture == nullptr ||
+        frame->format != AV_PIX_FMT_VULKAN)
+    {
         return false;
     }
 
-    REX::TRACE(
-        "Produced D3D11 texture from Vulkan frame: {}x{}",
-        width,
-        height
-    );
+    // TODO:
+    // Import output.texture into Vulkan.
+    // Copy normalized FFmpeg Vulkan frame into it.
+    // Synchronize ownership/access.
 
-    return true;
+    return false;
 }
 
-
-bool decoder::frameProduceBitmap(
+bool decoder::frameProduceD3D11(
     const AVFrame* frame,
+    producedFrame& output)
+{
+    if (
+        frame == nullptr ||
+        output.texture == nullptr ||
+        frame->format != AV_PIX_FMT_D3D11)
+    {
+        return false;
+    }
+
+    // TODO:
+    // Convert/copy FFmpeg D3D11 frame into
+    // canonical output.texture.
+
+    return false;
+}
+
+bool decoder::frameDump(
+    const producedFrame& frame,
     const char* outputPath)
 {
-    if (frame == nullptr || outputPath == nullptr)
+    if (
+        frame.texture == nullptr ||
+        outputPath == nullptr)
     {
         return false;
     }
 
-    const int width = frame->width;
-    const int height = frame->height;
-    const int stride = width * 4;
+    REX::INFO("Writing frame dump to {}", outputPath);
 
-    std::vector<std::uint8_t> bgraBuffer(
-        static_cast<std::size_t>(stride) * height
-    );
+    auto* device =
+        getD3D11Device();
 
-    SwsContext* swsContext = sws_getContext(
-        width,
-        height,
-        static_cast<AVPixelFormat>(frame->format),
-        width,
-        height,
-        AV_PIX_FMT_BGRA,
-        SWS_BILINEAR,
-        nullptr,
-        nullptr,
-        nullptr
-    );
+    auto* context =
+        getD3D11DeviceContext();
 
-    if (swsContext == nullptr)
+    if (
+        device == nullptr ||
+        context == nullptr)
     {
         return false;
     }
 
-    std::uint8_t* outputData[4]{
-        bgraBuffer.data(),
-        nullptr,
-        nullptr,
-        nullptr
-    };
+    REX::W32::D3D11_TEXTURE2D_DESC desc{};
+    frame.texture->GetDesc(&desc);
 
-    int outputLinesize[4]{
-        stride,
-        0,
-        0,
+    REX::W32::D3D11_TEXTURE2D_DESC stagingDesc =
+        desc;
+
+    stagingDesc.usage =
+        REX::W32::D3D11_USAGE_STAGING;
+
+    stagingDesc.bindFlags = 0;
+    stagingDesc.cpuAccessFlags =
+        REX::W32::D3D11_CPU_ACCESS_READ;
+    stagingDesc.miscFlags = 0;
+
+    REX::W32::ID3D11Texture2D* stagingTexture =
+        nullptr;
+
+    const auto createResult =
+        device->CreateTexture2D(
+            &stagingDesc,
+            nullptr,
+            &stagingTexture
+        );
+
+    if (
+        createResult < 0 ||
+        stagingTexture == nullptr)
+    {
+        return false;
+    }
+
+    context->CopyResource(
+        stagingTexture,
+        frame.texture
+    );
+
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+
+    const auto mapResult =
+        context->Map(
+            stagingTexture,
+            0,
+            REX::W32::D3D11_MAP_READ,
+            0,
+            &mapped
+        );
+
+    if (mapResult < 0)
+    {
+        stagingTexture->Release();
+        return false;
+    }
+    const int stride =
+        static_cast<int>(frame.width * 4);
+
+    std::vector<std::uint8_t> pixels(
+        static_cast<std::size_t>(stride) *
+        frame.height
+    );
+
+    for (std::uint32_t y = 0; y < frame.height; ++y)
+    {
+        const auto* source =
+            static_cast<const std::uint8_t*>(mapped.pData) +
+            static_cast<std::size_t>(y) * mapped.RowPitch;
+
+        auto* destination =
+            pixels.data() +
+            static_cast<std::size_t>(y) * stride;
+
+        for (std::uint32_t x = 0; x < frame.width; ++x)
+        {
+            destination[0] = source[2]; // B
+            destination[1] = source[1]; // G
+            destination[2] = source[0]; // R
+            destination[3] = source[3]; // A
+
+            source += 4;
+            destination += 4;
+        }
+    }
+
+    context->Unmap(
+        stagingTexture,
         0
-    };
-
-    const int convertedHeight = sws_scale(
-        swsContext,
-        frame->data,
-        frame->linesize,
-        0,
-        height,
-        outputData,
-        outputLinesize
     );
 
-    sws_freeContext(swsContext);
+    stagingTexture->Release();
 
-    if (convertedHeight != height)
-    {
-        return false;
-    }
-
-    if (!writeBmp(
+    return writeTga(
         outputPath,
-        bgraBuffer.data(),
-        width,
-        height,
-        stride))
-    {
-        return false;
+        pixels.data(),
+        static_cast<int>(frame.width),
+        static_cast<int>(frame.height),
+        stride
+    );
     }
-
-
-    return true;
 }
-
-
 
 double decoder::getFrameTimestamp(
     const AVFrame* frame) const

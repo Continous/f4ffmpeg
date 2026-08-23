@@ -81,29 +81,34 @@ bool testDecode()
                     "testDecode reached 10 seconds. Producing frame..."
                 );
 
-                decoder producer;
+            decoder producer;
 
-                const bool produced =
+            auto produced =
                 producer.frameProduce(
-                    latest->frame.get(),
-                    frameProduceMethod::bitmap,
-                    "Data/Video/f4ffmpeg/testDecode.bmp"
+                    latest->frame.get()
                 );
 
-                worker.stop();
+            worker.stop();
 
-                if (produced)
-                {
-                    REX::TRACE(
-                        "testDecode successfully produced testDecode.bmp."
-                    );
-                }
-                else
-                {
-                    REX::ERROR(
-                        "testDecode failed to produce final frame."
-                    );
-                }
+            const bool dumped =
+                produced &&
+                producer.frameDump(
+                    *produced,
+                    "Data/Video/f4ffmpeg/testDecode.tga"
+                );
+
+            if (dumped)
+            {
+                REX::TRACE(
+                    "testDecode successfully produced testDecode.tga."
+                );
+            }
+            else
+            {
+                REX::ERROR(
+                    "testDecode failed to produce final frame."
+                );
+            }
 
                 testDecodeRunning = false;
                 return;

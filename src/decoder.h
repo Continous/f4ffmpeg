@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstdint>
+#include <memory>
+
 extern "C"
 {
 #include <libavformat/avformat.h>
@@ -9,14 +12,7 @@ extern "C"
 
 namespace f4ffmpeg
 {
-
-        void initializeFFmpegLogging();
-
-        enum class frameProduceMethod
-    {
-        bitmap,
-        gpuTexture
-    };
+    void initializeFFmpegLogging();
 
     enum class decodeStatus
     {
@@ -32,33 +28,43 @@ namespace f4ffmpeg
         int ffmpegError = 0;
     };
 
+    struct producedFrame
+    {
+        producedFrame() = default;
+
+        producedFrame(
+            const producedFrame&
+        ) = delete;
+
+        producedFrame& operator=(
+            const producedFrame&
+        ) = delete;
+
+        REX::W32::ID3D11Texture2D* texture = nullptr;
+
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+
+        double timestamp = -1.0;
+
+        ~producedFrame();
+    };
+
     class decoder
     {
     public:
         ~decoder();
 
-
-
         bool open(const char* path);
         void close();
 
-        bool frameProduce(
-            const AVFrame* frame,
-            frameProduceMethod method,
-            const char* outputPath = nullptr
+        std::shared_ptr<producedFrame> frameProduce(
+            const AVFrame* frame
         );
 
-        bool frameProduceBitmap(
-            const AVFrame* frame,
+        bool frameDump(
+            const producedFrame& frame,
             const char* outputPath
-        );
-
-        bool frameProduceD3D11(
-            const AVFrame* frame
-        );
-
-        bool frameProduceVulkan(
-            const AVFrame* frame
         );
 
         bool initializeVideoDecoder();
@@ -74,6 +80,25 @@ namespace f4ffmpeg
         double getCurrentTimestamp() const;
 
     private:
+        std::shared_ptr<producedFrame> createProducedFrame(
+            int width,
+            int height
+        );
+
+        bool frameProduceVulkan(
+            const AVFrame* frame,
+            producedFrame& output
+        );
+
+        bool frameProduceD3D11(
+            const AVFrame* frame,
+            producedFrame& output
+        );
+
+        bool initializeHardwareDevice(
+            AVHWDeviceType deviceType
+        );
+
         AVFormatContext* formatContext = nullptr;
         AVCodecContext* codecContext = nullptr;
 
@@ -84,10 +109,6 @@ namespace f4ffmpeg
 
         AVPixelFormat hardwarePixelFormat =
             AV_PIX_FMT_NONE;
-
-        bool initializeHardwareDevice(
-            AVHWDeviceType deviceType
-        );
 
         const AVCodec* videoCodec = nullptr;
 

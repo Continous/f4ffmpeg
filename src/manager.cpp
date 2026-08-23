@@ -7,9 +7,7 @@ namespace f4ffmpeg
 {
 
 bool manager::start(
-    const char* inputPath,
-    producerOutput output,
-    const char* outputPath)
+    const char* inputPath)
 {
     if (inputPath == nullptr)
     {
@@ -21,7 +19,6 @@ bool manager::start(
         return false;
     }
 
-
     if (managerThread.joinable())
     {
         managerThread.join();
@@ -32,9 +29,7 @@ bool manager::start(
         return false;
     }
 
-    if (!producerWorker.start(
-            output,
-            outputPath))
+    if (!producerWorker.start())
     {
         decoderWorker.stop();
         return false;
@@ -54,6 +49,13 @@ bool manager::start(
 
     return true;
 }
+
+std::shared_ptr<const producedFrame>
+manager::getLatestFrame() const
+{
+    return producerWorker.getLatestFrame();
+}
+
 void manager::run()
 {
     while (!stopRequested)
@@ -145,8 +147,6 @@ manager::~manager()
 
 std::shared_ptr<manager> createManager(
     const char* inputPath,
-    producerOutput output,
-    const char* outputPath,
     bool looping)
 {
     auto newManager =
@@ -154,10 +154,7 @@ std::shared_ptr<manager> createManager(
 
     newManager->setLooping(looping);
 
-    if (!newManager->start(
-            inputPath,
-            output,
-            outputPath))
+    if (!newManager->start(inputPath))
     {
         return nullptr;
     }
