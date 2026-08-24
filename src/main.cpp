@@ -7,7 +7,9 @@ extern "C"
 }
 
 #include <mutex>
+#include <cmath>
 
+#include "playbackClock.h"
 #include "config.h"
 #include "decoder.h"
 #include "api.h"
@@ -97,11 +99,59 @@ namespace Main
 		}
 	}
 
-	void initF4ffmpeg()
-	{
-		f4ffmpeg::config::initialize();
-		REX::INFO("Beginning f4ffmpeg graphics initialization");
+void initF4ffmpeg()
+{
+    f4ffmpeg::config::initialize();
+
+    auto& clock =
+        f4ffmpeg::playbackClock::get();
+
+    const auto clockMode =
+        f4ffmpeg::config::clockMode.GetValue();
+
+    if (clock.setMode(clockMode))
+    {
+        REX::INFO(
+            "Playback clock mode: '{}'.",
+            clockMode
+        );
+    }
+    else
+    {
+        REX::WARN(
+            "Unknown playback clock mode '{}'. "
+            "Defaulting to hybrid.",
+            clockMode
+        );
+
+        clock.setMode(
+            f4ffmpeg::playbackClockMode::hybrid
+        );
+    }
+
+    const double maxFrameLag =
+        f4ffmpeg::config::maxFrameLag.GetValue();
+
+    if (
+        !std::isfinite(maxFrameLag) ||
+        maxFrameLag < 0.0)
+    {
+        REX::WARN(
+            "MaxFrameLag value '{}' is invalid. "
+            "Using 0.250 seconds.",
+            maxFrameLag
+        );
+    }
+    else
+    {
+        REX::INFO(
+            "Max frame lag: {:.3f}s.",
+            maxFrameLag
+        );
+    }
+
 		f4ffmpeg::initializeFFmpegLogging();
+		REX::INFO("Beginning f4ffmpeg graphics initialization");
 
 		// Check current FFMPEG configuration
 		REX::DEBUG(

@@ -4,6 +4,7 @@
 #include <vector>
 #include "pch.h"
 #include "graphics.h"
+#include <cmath>
 
 extern "C"
 {
@@ -192,6 +193,123 @@ namespace {
     }
 }
 
+double decoder::getDuration() const
+{
+    if (
+        formatContext == nullptr ||
+        videoStreamIndex < 0 ||
+        videoStreamIndex >=
+            static_cast<int>(
+                formatContext->nb_streams
+            ))
+    {
+        return -1.0;
+    }
+
+    const AVStream* stream =
+        formatContext
+            ->streams[videoStreamIndex];
+
+    if (
+        stream->duration !=
+            AV_NOPTS_VALUE &&
+        stream->duration > 0)
+    {
+        return
+            static_cast<double>(
+                stream->duration
+            ) *
+            av_q2d(
+                stream->time_base
+            );
+    }
+
+    if (
+        formatContext->duration !=
+            AV_NOPTS_VALUE &&
+        formatContext->duration > 0)
+    {
+        return
+            static_cast<double>(
+                formatContext->duration
+            ) /
+            AV_TIME_BASE;
+    }
+
+    return -1.0;
+}
+
+bool decoder::seek(
+    double timestamp)
+{
+    if (
+        formatContext == nullptr ||
+        codecContext == nullptr ||
+        videoStreamIndex < 0 ||
+        !std::isfinite(timestamp))
+    {
+        return false;
+    }
+
+    AVStream* stream =
+        formatContext
+            ->streams[videoStreamIndex];
+
+    const auto timestampUs =
+        static_cast<std::int64_t>(
+            std::llround(
+                timestamp *
+                AV_TIME_BASE
+            )
+        );
+
+    const auto targetTimestamp =
+        av_rescale_q(
+            timestampUs,
+            AV_TIME_BASE_Q,
+            stream->time_base
+        );
+
+    if (packet != nullptr)
+    {
+        av_packet_unref(packet);
+    }
+
+    const int result =
+        av_seek_frame(
+            formatContext,
+            videoStreamIndex,
+            targetTimestamp,
+            AVSEEK_FLAG_BACKWARD
+        );
+
+    if (result < 0)
+    {
+        REX::TRACE(
+            "FFmpeg seek to {:.3f}s failed: {}",
+            timestamp,
+            result
+        );
+
+        return false;
+    }
+
+    avcodec_flush_buffers(
+        codecContext
+    );
+
+    decoderDraining = false;
+    decoderEOF = false;
+    currentTimestamp = -1.0;
+
+    REX::TRACE(
+        "Decoder seeked toward {:.3f}s.",
+        timestamp
+    );
+
+    return true;
+}
+
 bool decoder::initializeHardwareDevice(
     AVHWDeviceType deviceType)
 {
@@ -356,24 +474,26 @@ decoder::createProducedFrame(
 
     auto output =
         std::make_shared<producedFrame>();
+
     REX::TRACE(
-        "CREATING PRODUCED D3D11 TEXTURE: {}X{}",
-        WIDTH,
-        HEIGHT
+        "Creating produced D3D11 texture: {}x{}",
+        width,
+        height
     );
 
-    CONST AUTO RESULT =
-        DEVICE->CREATETEXTURE2D(
-            &TEXTUREDESC,
-            NULLPTR,
-            &OUTPUT->TEXTURE
+    const auto result =
+        device->CreateTexture2D(
+            &textureDesc,
+            nullptr,
+            &output->texture
         );
 
     REX::TRACE(
-        "CREATETEXTURE2D RETURNED 0X{:08X}, TEXTURE={}",
-        STATIC_CAST<STD::UINT32_T>(RESULT),
-        STATIC_CAST<VOID*>(OUTPUT->TEXTURE)
+        "CreateTexture2D returned 0x{:08X}, texture={}",
+        static_cast<std::uint32_t>(result),
+        static_cast<void*>(output->texture)
     );
+
     if (result < 0)
     {
         return nullptr;

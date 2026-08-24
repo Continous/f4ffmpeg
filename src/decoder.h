@@ -22,6 +22,7 @@ namespace f4ffmpeg
         ffmpegError
     };
 
+
     struct decodeResult
     {
         decodeStatus status;
@@ -79,6 +80,12 @@ namespace f4ffmpeg
 
         double getCurrentTimestamp() const;
 
+        double getDuration() const;
+
+        bool seek(
+            double timestamp
+        );
+
     private:
         std::shared_ptr<producedFrame> createProducedFrame(
             int width,
@@ -119,5 +126,7 @@ namespace f4ffmpeg
         bool decoderDraining = false;
         bool decoderEOF = false;
         double currentTimestamp = -1.0;
+
+
     };
 }

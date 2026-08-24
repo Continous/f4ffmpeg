@@ -1,5 +1,10 @@
 #include "decoderWorker.h"
 #include "pch.h"
+#include "config.h"
+#include "playbackClock.h"
+
+#include <algorithm>
+#include <cmath>
 
 
 extern "C"
@@ -57,7 +62,13 @@ bool decodeWorker::start(const char* path)
 
 void decodeWorker::stop()
 {
-    stopRequested = true;
+    stopRequested.store(
+        true,
+        std::memory_order_release
+    );
+
+    playbackClock::get()
+        .notifyWaiters();
 
     if (workerThread.joinable())
     {
@@ -65,170 +76,445 @@ void decodeWorker::stop()
     }
 }
 
+namespace
+{
+    constexpr double lagDebugThreshold =
+        0.100;
+
+    constexpr double lagInfoThreshold =
+        0.250;
+
+    constexpr double lagWarnThreshold =
+        0.500;
+
+    constexpr double lagErrorThreshold =
+        1.000;
+
+
+    void logDecoderLag(
+        double frameTimestamp,
+        double clockTime,
+        double lag)
+    {
+        if (lag >= lagErrorThreshold)
+        {
+            REX::ERROR(
+                "Decoder returned frame time {:.3f}, "
+                "but clock time is {:.3f} "
+                "(lag: {:.3f}s). "
+                "Did the decoder fall behind?",
+                frameTimestamp,
+                clockTime,
+                lag
+            );
+
+            return;
+        }
+
+        if (lag >= lagWarnThreshold)
+        {
+            REX::WARN(
+                "Decoder returned frame time {:.3f}, "
+                "but clock time is {:.3f} "
+                "(lag: {:.3f}s). "
+                "Did the decoder fall behind?",
+                frameTimestamp,
+                clockTime,
+                lag
+            );
+
+            return;
+        }
+
+        if (lag >= lagInfoThreshold)
+        {
+            REX::INFO(
+                "Decoder returned frame time {:.3f}, "
+                "but clock time is {:.3f} "
+                "(lag: {:.3f}s). "
+                "Did the decoder fall behind?",
+                frameTimestamp,
+                clockTime,
+                lag
+            );
+
+            return;
+        }
+
+        if (lag >= lagDebugThreshold)
+        {
+            REX::DEBUG(
+                "Decoder returned frame time {:.3f}, "
+                "but clock time is {:.3f} "
+                "(lag: {:.3f}s). "
+                "Did the decoder fall behind?",
+                frameTimestamp,
+                clockTime,
+                lag
+            );
+        }
+    }
+}
+
+
 void decodeWorker::run()
 {
-
-    REX::TRACE("Decode worker is now running.");
-    AVFrame* frame = av_frame_alloc();
+    AVFrame* frame =
+        av_frame_alloc();
 
     if (frame == nullptr)
     {
+        lastStatus =
+            decodeStatus::ffmpegError;
 
-        lastStatus = decodeStatus::ffmpegError;
-        lastFfmpegError = AVERROR(ENOMEM);
+        lastFfmpegError =
+            AVERROR(ENOMEM);
 
         running = false;
+
         return;
     }
 
-    bool reportedD3D11Frame = false;
-    bool reportedFirstFrame = false;
+    auto& clock =
+        playbackClock::get();
 
-    while (!stopRequested)
+    std::uint64_t lastClockUpdate =
+        clock.getUpdateCount();
+
+    std::uint64_t lastDiscontinuity =
+        clock.getDiscontinuityCount();
+
+    bool timelineInitialized =
+        false;
+
+    double clockOrigin =
+        0.0;
+
+    double firstFrameTimestamp =
+        0.0;
+
+    while (!stopRequested.load(
+        std::memory_order_acquire))
     {
-        const auto result =
-            workerDecoder.decodeNextFrame(frame);
+        // Do not even ask FFmpeg for another frame
+        // until Fallout has issued another playback
+        // clock update.
+        if (!clock.waitForUpdate(
+                lastClockUpdate,
+                stopRequested))
 
-        switch (result.status)
+
+        double seekTargetTimestamp = -1.0;
+        bool recoveringFromSeek = false;
+
         {
-            case decodeStatus::frameReady:
+            break;
+        }
+
+            const auto currentDiscontinuity =
+            clock.getDiscontinuityCount();
+
+        if (
+            currentDiscontinuity !=
+            lastDiscontinuity)
+        {
+            lastDiscontinuity =
+                currentDiscontinuity;
+
+            if (timelineInitialized)
             {
-                if (!reportedFirstFrame)
-                {
-                    REX::TRACE(
-                        "First decoded frame format: {} "
-                        "(AV_PIX_FMT_D3D11 = {})",
-                        frame->format,
-                        static_cast<int>(AV_PIX_FMT_D3D11)
-                    );
-                    if (frame->hw_frames_ctx != nullptr)
-                    {
-                        auto* framesContext =
-                            reinterpret_cast<AVHWFramesContext*>(
-                                frame->hw_frames_ctx->data
-                            );
+                const double elapsed =
+                    clock.now() -
+                    clockOrigin;
 
-                        const AVPixelFormat softwareFormat =
-                            framesContext->sw_format;
-
-                        const char* softwareFormatName =
-                            av_get_pix_fmt_name(
-                                softwareFormat
-                            );
-
-                        REX::TRACE(
-                            "D3D11 frame backing format: {} ({})",
-                            softwareFormatName
-                                ? softwareFormatName
-                                : "unknown",
-                            static_cast<int>(softwareFormat)
-                        );
-                    }
-
-                    reportedFirstFrame = true;
-                }
+                const double duration =
+                    workerDecoder
+                        .getDuration();
 
                 if (
-                    !reportedD3D11Frame &&
-                    frame->format == AV_PIX_FMT_D3D11)
+                    duration > 0.0 &&
+                    elapsed >= duration)
                 {
-                    REX::TRACE(
-                        "Received hardware D3D11 frame: "
-                        "texture={}, slice={}",
-                        static_cast<void*>(
-                            frame->data[0]
-                        ),
-                        reinterpret_cast<std::intptr_t>(
-                            frame->data[1]
-                        )
+                    REX::DEBUG(
+                        "Playback clock advanced to {:.3f}s, "
+                        "beyond video duration {:.3f}s. "
+                        "Reporting logical EOF.",
+                        elapsed,
+                        duration
                     );
 
-                    reportedD3D11Frame = true;
+                    lastStatus =
+                        decodeStatus::endOfFile;
+
+                    lastFfmpegError = 0;
+
+                    av_frame_free(
+                        &frame
+                    );
+
+                    running = false;
+
+                    return;
                 }
 
-            AVFrame* clonedFrame =
-                av_frame_clone(frame);
+                seekTargetTimestamp =
+                    firstFrameTimestamp +
+                    elapsed;
 
-            if (clonedFrame != nullptr)
+                if (workerDecoder.seek(
+                        seekTargetTimestamp))
+                {
+                    recoveringFromSeek =
+                        true;
+
+                    REX::DEBUG(
+                        "Playback clock discontinuity. "
+                        "Seeking decoder toward frame time {:.3f}.",
+                        seekTargetTimestamp
+                    );
+                }
+                else
+                {
+                    REX::WARN(
+                        "Failed to seek decoder after playback clock discontinuity. "
+                        "Falling back to normal frame dropping."
+                    );
+                }
+            }
+        }
+
+        decodeResult result{};
+        double frameTimestamp = -1.0;
+
+        while (!stopRequested.load(
+            std::memory_order_acquire))
+        {
+            result =
+                workerDecoder.decodeNextFrame(
+                    frame
+                );
+
+            if (
+                result.status !=
+                decodeStatus::frameReady)
             {
-                std::shared_ptr<AVFrame> framePtr(
-                    clonedFrame,
-                    [](AVFrame* frame)
-                    {
-                        av_frame_free(&frame);
-                    }
+                break;
+            }
+
+            frameTimestamp =
+                workerDecoder
+                    .getFrameTimestamp(
+                        frame
+                    );
+
+            if (!std::isfinite(
+                    frameTimestamp))
+            {
+                REX::WARN(
+                    "Decoder returned a frame "
+                    "without a usable timestamp."
                 );
 
-                auto published =
-                    std::make_shared<decodedFrame>();
+                continue;
+            }
 
-                published->frame =
-                    std::move(framePtr);
-
-                published->timestamp =
-                    workerDecoder.getFrameTimestamp(frame);
-
-                latestFrame.store(
-                    std::move(published),
-                    std::memory_order_release
-                );
+            if (
+                recoveringFromSeek &&
+                frameTimestamp <
+                    seekTargetTimestamp)
+            {
+                // av_seek_frame() seeks to an earlier
+                // keyframe. Decode forward without
+                // publishing obsolete frames.
+                continue;
             }
 
             break;
         }
 
-        case decodeStatus::endOfFile:
-            REX::TRACE(
-                "Decoder thread reached EOF."
-            );
 
-            lastStatus = result.status;
-            lastFfmpegError = result.ffmpegError;
+        switch (result.status)
+        {
+            case decodeStatus::frameReady:
+            {
 
-            av_frame_free(&frame);
-            running = false;
-            return;
+                if (!std::isfinite(
+                        frameTimestamp))
+                {
+                    REX::WARN(
+                        "Decoder returned a frame "
+                        "without a usable timestamp."
+                    );
 
-        case decodeStatus::stopped:
-            REX::TRACE(
-                "Decoder thread received stop command."
-            );
+                    break;
+                }
 
-            lastStatus = result.status;
-            lastFfmpegError = result.ffmpegError;
+                // The first decoded frame establishes
+                // this stream's relationship to the
+                // global Fallout playback clock.
+                if (!timelineInitialized)
+                {
+                    firstFrameTimestamp =
+                        frameTimestamp;
 
-            av_frame_free(&frame);
-            running = false;
-            return;
+                    clockOrigin =
+                        clock.now();
 
-        case decodeStatus::ffmpegError:
-            REX::ERROR(
-                "Decoder thread received an FFmpeg error."
-            );
+                    timelineInitialized =
+                        true;
+                }
 
-            REX::ERROR(
-                "Last status: {}",
-                static_cast<int>(result.status)
-            );
+                const double targetClockTime =
+                    clockOrigin +
+                    (
+                        frameTimestamp -
+                        firstFrameTimestamp
+                    );
+                if (
+                    clock.getDiscontinuityCount() !=
+                    lastDiscontinuity)
+                {
+                    continue;
+                }
 
-            REX::ERROR(
-                "FFmpeg error: {}",
-                result.ffmpegError
-            );
+                // The frame may have been decoded ahead
+                // of presentation time. Hold it here
+                // until Fallout advances sufficiently.
+                if (!clock.waitUntil(
+                        targetClockTime,
+                        stopRequested))
+                {
+                    break;
+                }
 
-            lastStatus = result.status;
-            lastFfmpegError = result.ffmpegError;
+                if (
+                    clock.getDiscontinuityCount() !=
+                    lastDiscontinuity)
+                {
+                    continue;
+                }
+                // waitUntil() may have crossed several
+                // Fallout updates. Consume all of them
+                // so the next iteration cannot decode
+                // another frame during the same update.
+                lastClockUpdate =
+                    clock.getUpdateCount();
 
-            av_frame_free(&frame);
-            running = false;
-            return;
+                // Convert the global playback clock back
+                // into this video's timestamp domain.
+                const double clockTime =
+                    firstFrameTimestamp +
+                    (
+                        clock.now() -
+                        clockOrigin
+                    );
+
+                const double lag =
+                    clockTime -
+                    frameTimestamp;
+
+                if (lag >= lagDebugThreshold)
+                {
+                    logDecoderLag(
+                        frameTimestamp,
+                        clockTime,
+                        lag
+                    );
+                }
+
+                double maxFrameLag =
+                    config::maxFrameLag.GetValue();
+
+                if (
+                    !std::isfinite(maxFrameLag) ||
+                    maxFrameLag < 0.0)
+                {
+                    maxFrameLag = 0.250;
+                }
+
+                if (lag > maxFrameLag)
+                {
+                    REX::TRACE(
+                        "Dropping frame {:.3f}: "
+                        "lag {:.3f}s exceeds "
+                        "MaxFrameLag {:.3f}s.",
+                        frameTimestamp,
+                        lag,
+                        maxFrameLag
+                    );
+
+                    break;
+                }
+
+                AVFrame* clonedFrame =
+                    av_frame_clone(frame);
+
+                if (clonedFrame == nullptr)
+                {
+                    break;
+                }
+
+                std::shared_ptr<AVFrame>
+                    framePtr(
+                        clonedFrame,
+                        [](AVFrame* frame)
+                        {
+                            av_frame_free(
+                                &frame
+                            );
+                        }
+                    );
+
+                auto published =
+                    std::make_shared<
+                        decodedFrame
+                    >();
+
+                published->frame =
+                    std::move(framePtr);
+
+                published->timestamp =
+                    frameTimestamp;
+
+                latestFrame.store(
+                    std::move(published),
+                    std::memory_order_release
+                );
+
+                break;
+            }
+
+            case decodeStatus::endOfFile:
+            case decodeStatus::stopped:
+            case decodeStatus::ffmpegError:
+            {
+                lastStatus =
+                    result.status;
+
+                lastFfmpegError =
+                    result.ffmpegError;
+
+                av_frame_free(
+                    &frame
+                );
+
+                running = false;
+
+                return;
+            }
         }
     }
 
-    lastStatus = decodeStatus::stopped;
-    lastFfmpegError = 0;
+    lastStatus =
+        decodeStatus::stopped;
 
-    av_frame_free(&frame);
+    lastFfmpegError =
+        0;
+
+    av_frame_free(
+        &frame
+    );
+
     running = false;
 }
 

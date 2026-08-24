@@ -10,6 +10,17 @@ namespace f4ffmpeg::config
         "Level",
         "info"
     };
+    inline REX::TTomlSetting<std::string> clockMode{
+        "Playback",
+        "Clock",
+        "hybrid"
+    };
+
+    inline REX::TTomlSetting<double> maxFrameLag{
+        "Playback",
+        "MaxFrameLag",
+        0.250
+    };
 
     void initialize();
 }

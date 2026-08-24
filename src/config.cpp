@@ -6,6 +6,7 @@
 
 namespace f4ffmpeg::config
 {
+
     static void applyLogLevel()
     {
         const auto level = logLevel.GetValue();
