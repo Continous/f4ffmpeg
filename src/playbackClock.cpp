@@ -161,15 +161,17 @@ namespace f4ffmpeg
         return true;
     }
 
-    void playbackClock::update(
+    bool playbackClock::update(
         std::uint64_t expectedTimerTime)
     {
         auto* timer =
             RE::BSTimer::GetSingleton();
 
-        if (timer == nullptr)
+        if (
+            timer == nullptr ||
+            timer->lastTime != expectedTimerTime)
         {
-            return;
+            return false;
         }
 
         const double gameDelta =
@@ -219,6 +221,13 @@ namespace f4ffmpeg
         bool worldJumpDetected = false;
         double detectedWorldJump = 0.0;
         double expectedWorldAdvance = 0.0;
+
+        if (
+            timer->lastTime !=
+                expectedTimerTime)
+        {
+            return false;
+        }
 
         {
             std::scoped_lock lock(mutex);
@@ -367,6 +376,7 @@ namespace f4ffmpeg
             );
         }
         condition.notify_all();
+        return true;
     }
 
 
