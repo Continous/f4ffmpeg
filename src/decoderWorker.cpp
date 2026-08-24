@@ -203,15 +203,15 @@ void decodeWorker::run()
                 lastClockUpdate,
                 stopRequested))
 
-
-        double seekTargetTimestamp = -1.0;
-        bool recoveringFromSeek = false;
-
         {
             break;
         }
 
-            const auto currentDiscontinuity =
+
+
+        double seekTargetTimestamp = -1.0;
+        bool recoveringFromSeek = false;
+        const auto currentDiscontinuity =
             clock.getDiscontinuityCount();
 
         if (
