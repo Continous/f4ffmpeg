@@ -330,13 +330,14 @@ public:
     void OnButtonEvent(
         const RE::ButtonEvent* button) override
     {
-        if (
-            button == nullptr ||
-            button->idCode != debugDecodeKey ||
-            !button->QJustPressed())
-        {
-            return;
-        }
+		if (
+			button == nullptr ||
+			button->GetBSButtonCode() !=
+				debugDecodeKey ||
+			!button->QJustPressed())
+		{
+			return;
+		}
 
         REX::DEBUG(
             "Debug decode hotkey pressed."
