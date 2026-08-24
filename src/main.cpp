@@ -312,93 +312,67 @@ void startDebugDecode()
     }
 }
 
-class DebugInputSink final :
-    public RE::BSTEventSink<RE::InputEvent*>
+class DebugInputHandler final :
+    public RE::PlayerInputHandler
 {
 public:
-    static DebugInputSink* GetSingleton()
+    explicit DebugInputHandler(
+        RE::PlayerControlsData& data) :
+        RE::PlayerInputHandler(data)
+    {}
+
+    bool ShouldHandleEvent(
+        const RE::InputEvent* event) override
     {
-        static DebugInputSink instance;
-        return &instance;
+        return
+            event != nullptr &&
+            *event->eventType ==
+                RE::INPUT_EVENT_TYPE::kButton &&
+            *event->device ==
+                RE::INPUT_DEVICE::kKeyboard;
     }
 
-	RE::BSEventNotifyControl ProcessEvent(
-		RE::InputEvent* const& eventList,
-		RE::BSTEventSource<RE::InputEvent*>*
-	) override
-	{
-		if (eventList == nullptr)
-		{
-			return RE::BSEventNotifyControl::kContinue;
-		}
+    void OnButtonEvent(
+        const RE::ButtonEvent* button) override
+    {
+        if (
+            button == nullptr ||
+            button->idCode != debugDecodeKey ||
+            !button->QJustPressed())
+        {
+            return;
+        }
 
-		for (
-			auto* event = eventList;
-			event != nullptr;
-			event = event->next)
-		{
-			if (
-				*event->eventType !=
-					RE::INPUT_EVENT_TYPE::kButton ||
-				*event->device !=
-					RE::INPUT_DEVICE::kKeyboard)
-			{
-				continue;
-			}
+        REX::DEBUG(
+            "Debug decode hotkey pressed."
+        );
 
-			auto* button =
-				event->As<RE::ButtonEvent>();
-
-			if (button == nullptr)
-			{
-				continue;
-			}
-
-			const bool justPressed =
-				button->value > 0.0f &&
-				button->heldDownSecs <= 0.000001f;
-
-			if (
-				button->idCode != debugDecodeKey ||
-				!justPressed)
-			{
-				continue;
-			}
-
-			REX::DEBUG(
-				"Debug decode hotkey pressed."
-			);
-
-			startDebugDecode();
-
-			break;
-		}
-
-		return RE::BSEventNotifyControl::kContinue;
-	}
-
-private:
-    DebugInputSink() = default;
+        startDebugDecode();
+    }
 };
 
 
 void registerDebugInput()
 {
-    auto* inputManager =
-        RE::BSInputDeviceManager::GetSingleton();
+    auto* playerControls =
+        RE::PlayerControls::GetSingleton();
 
-    if (inputManager == nullptr)
+    if (playerControls == nullptr)
     {
         REX::ERROR(
             "Failed to register debug decode hotkey: "
-            "input manager unavailable."
+            "player controls unavailable."
         );
 
         return;
     }
 
-    inputManager->AddEventSink(
-        DebugInputSink::GetSingleton()
+    static DebugInputHandler debugInput{
+        playerControls->data
+    };
+
+    playerControls->RegisterHandler(
+        &debugInput
     );
 
     REX::DEBUG(
