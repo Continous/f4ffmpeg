@@ -161,7 +161,8 @@ namespace f4ffmpeg
         return true;
     }
 
-    void playbackClock::update()
+    void playbackClock::update(
+        std::uint64_t expectedTimerTime)
     {
         auto* timer =
             RE::BSTimer::GetSingleton();

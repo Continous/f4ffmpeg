@@ -9,6 +9,7 @@ extern "C"
 #include <mutex>
 #include <cmath>
 
+#include <cstdint>
 #include "playbackClock.h"
 #include "config.h"
 #include "decoder.h"
@@ -18,7 +19,7 @@ extern "C"
 #include "decoderWorker.h"
 #include "manager.h"
 #include "producerWorker.h"
-
+#include "playbackClockSource.h"
 
 extern "C"
 __declspec(dllexport)
@@ -48,6 +49,7 @@ namespace Main
 
     bool InitPlugin(const F4SE::LoadInterface* a_f4se)
     {
+
         if (isInit)
             return true;
 
@@ -124,6 +126,23 @@ void initF4ffmpeg()
 
     auto& clock =
         f4ffmpeg::playbackClock::get();
+
+	// set mode, validate config, etc.
+
+	if (
+		!f4ffmpeg::playbackClockSource::get()
+			.start())
+	{
+		REX::WARN(
+			"Playback clock source was already running."
+		);
+	}
+	else
+	{
+		REX::INFO(
+			"Playback clock source initialized."
+		);
+	}
 
     const auto clockMode =
         f4ffmpeg::config::clockMode.GetValue();

@@ -43,9 +43,10 @@ namespace f4ffmpeg
         [[nodiscard]]
         playbackClockMode getMode() const;
 
-        // Called exactly once from the selected
-        // Fallout gameplay update point.
-        void update();
+        // Fallout gameplay update point. Handled by playbackClockSource
+        bool update(
+            std::uint64_t expectedTimerTime
+        );
 
         // Absolute f4ffmpeg clock time, in seconds.
         [[nodiscard]]
