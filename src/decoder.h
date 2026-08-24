@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <vector>
 
 extern "C"
 {
@@ -59,9 +61,8 @@ namespace f4ffmpeg
         bool open(const char* path);
         void close();
 
-        std::shared_ptr<producedFrame> frameProduce(
-            const AVFrame* frame
-        );
+        std::shared_ptr<producedFrame>
+        frameProduce(const AVFrame* frame);
 
         bool frameDump(
             const producedFrame& frame,
@@ -87,10 +88,24 @@ namespace f4ffmpeg
         );
 
     private:
-        std::shared_ptr<producedFrame> createProducedFrame(
+        std::shared_ptr<producedFrame>
+        createProducedFrame(
+        int width,
+        int height
+        );
+
+        std::shared_ptr<producedFrame>
+        acquireProducedFrame(
             int width,
             int height
         );
+
+        void clearProducedFrames();
+
+        std::vector<std::shared_ptr<producedFrame>>
+            producedFrames;
+
+        std::mutex producedFramesMutex;
 
         bool frameProduceVulkan(
             const AVFrame* frame,

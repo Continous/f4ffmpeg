@@ -363,56 +363,76 @@ bool decoder::initializeHardwareDevice(
     return true;
 }
 
+std::shared_ptr<producedFrame>
+decoder::acquireProducedFrame(
+    int width,
+    int height)
+{
+    std::scoped_lock lock(producedFrameMutex);
+
+    for (auto& output : producedFrames)
+    {
+        if (
+            output.use_count() == 1 &&
+            output->width ==
+                static_cast<std::uint32_t>(width) &&
+            output->height ==
+                static_cast<std::uint32_t>(height))
+        {
+            return output;
+        }
+    }
+
+    auto output =
+        createProducedFrame(width, height);
+
+    if (!output)
+        return nullptr;
+
+    producedFrames.emplace_back(output);
+
+    REX::TRACE(
+        "Produced frame pool grew to {} surfaces.",
+        producedFrames.size()
+    );
+
+    return output;
+}
+
+void decoder::clearProducedFrames()
+{
+    std::scoped_lock lock(producedFramesMutex);
+
+    producedFrames.clear();
+}
 
 std::shared_ptr<producedFrame>
 decoder::frameProduce(const AVFrame* frame)
 {
     if (frame == nullptr)
-    {
         return nullptr;
-    }
 
-    auto output = // Make the D3D11 texture from the get-go.
-        createProducedFrame(
+    auto output =
+        acquireProducedFrame(
             frame->width,
-            frame->height
-        );
+            frame->height);
 
     if (!output)
-    {
+        return nullptr;
+
+    if (frame->format == AV_PIX_FMT_VULKAN) {
+        if (!frameProduceVulkan(frame, *output))
+            return nullptr;
+    }
+    else if (frame->format == AV_PIX_FMT_D3D11) {
+        if (!frameProduceD3D11(frame, *output))
+            return nullptr;
+    }
+    else {
         return nullptr;
     }
 
-    if (frame->format == AV_PIX_FMT_VULKAN)
-    {
-        if (!frameProduceVulkan(
-                frame,
-                *output))
-        {
-            return nullptr;
-        }
-
-        return output;
-    }
-
-    if (frame->format == AV_PIX_FMT_D3D11)
-    {
-        if (!frameProduceD3D11(
-                frame,
-                *output))
-        {
-            return nullptr;
-        }
-
-        return output;
-    }
-
-    REX::TRACE(
-        "Unsupported hardware frame format: {}",
-        frame->format
-    );
-
-    return nullptr;
+    return output;
 }
 
 producedFrame::~producedFrame()
@@ -1126,6 +1146,7 @@ bool decoder::initializeVideoDecoder()
 
         decoderDraining = false;
         decoderEOF = false;
+        clearProducedFrames();
     }
             //Get ffmpeg logs.
     namespace
