@@ -368,7 +368,7 @@ decoder::acquireProducedFrame(
     int width,
     int height)
 {
-    std::scoped_lock lock(producedFrameMutex);
+    std::scoped_lock lock(producedFramesMutex);
 
     for (auto& output : producedFrames)
     {
