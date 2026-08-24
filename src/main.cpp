@@ -38,7 +38,7 @@ namespace Main
 	static std::shared_ptr<f4ffmpeg::manager>
     testManager;
 
-    constexpr std::uint32_t debugDecodeKey =
+	constexpr RE::BS_BUTTON_CODE debugDecodeKey =
 		RE::BS_BUTTON_CODE::kF10;
 
 	void onF4SEMessage(F4SE::MessagingInterface::Message* message);
