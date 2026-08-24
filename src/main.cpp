@@ -322,52 +322,52 @@ public:
         return &instance;
     }
 
-    RE::BSEventNotifyControl ProcessEvent(
-        RE::InputEvent* const* eventList,
-        RE::BSTEventSource<RE::InputEvent*>*
-    ) override
-    {
-        if (eventList == nullptr)
-        {
-            return RE::BSEventNotifyControl::kContinue;
-        }
+	RE::BSEventNotifyControl ProcessEvent(
+		RE::InputEvent* const& eventList,
+		RE::BSTEventSource<RE::InputEvent*>*
+	) override
+	{
+		if (eventList == nullptr)
+		{
+			return RE::BSEventNotifyControl::kContinue;
+		}
 
-        for (
-            auto* event = *eventList;
-            event != nullptr;
-            event = event->next)
-        {
-            if (
-                *event->eventType !=
-                    RE::INPUT_EVENT_TYPE::kButton ||
-                *event->device !=
-                    RE::INPUT_DEVICE::kKeyboard)
-            {
-                continue;
-            }
+		for (
+			auto* event = eventList;
+			event != nullptr;
+			event = event->next)
+		{
+			if (
+				*event->eventType !=
+					RE::INPUT_EVENT_TYPE::kButton ||
+				*event->device !=
+					RE::INPUT_DEVICE::kKeyboard)
+			{
+				continue;
+			}
 
-            auto* button =
-                event->As<RE::ButtonEvent>();
+			auto* button =
+				event->As<RE::ButtonEvent>();
 
-            if (
-                button == nullptr ||
-                button->idCode != debugDecodeKey ||
-                !button->JustPressed())
-            {
-                continue;
-            }
+			if (
+				button == nullptr ||
+				button->idCode != debugDecodeKey ||
+				!button->JustPressed())
+			{
+				continue;
+			}
 
-            REX::DEBUG(
-                "Debug decode hotkey pressed."
-            );
+			REX::DEBUG(
+				"Debug decode hotkey pressed."
+			);
 
-            startDebugDecode();
+			startDebugDecode();
 
-            break;
-        }
+			break;
+		}
 
-        return RE::BSEventNotifyControl::kContinue;
-    }
+		return RE::BSEventNotifyControl::kContinue;
+	}
 
 private:
     DebugInputSink() = default;
