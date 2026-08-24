@@ -90,15 +90,29 @@ namespace Main
 
 		switch (message->type)
 		{
+			case F4SE::MessagingInterface::kInputLoaded:
+			{
+				registerDebugInput();
+				break;
+			}
+
 			case F4SE::MessagingInterface::kGameDataReady:
+			{
 				if (!isGameReady)
 				{
 					isGameReady = true;
-					REX::INFO("F4SE reports game data ready, begin f4ffmpeg main initialization...");
+
+					REX::INFO(
+						"F4SE reports game data ready, "
+						"begin f4ffmpeg main initialization..."
+					);
 
 					initF4ffmpeg();
-					break;
 				}
+
+				break;
+			}
+
 			default:
 				break;
 		}
@@ -277,6 +291,92 @@ void startDebugDecode()
             "Failed to start debug decode manager."
         );
     }
+}
+
+class DebugInputSink final :
+    public RE::BSTEventSink<RE::InputEvent*>
+{
+public:
+    static DebugInputSink* GetSingleton()
+    {
+        static DebugInputSink instance;
+        return &instance;
+    }
+
+    RE::BSEventNotifyControl ProcessEvent(
+        RE::InputEvent* const* eventList,
+        RE::BSTEventSource<RE::InputEvent*>*
+    ) override
+    {
+        if (eventList == nullptr)
+        {
+            return RE::BSEventNotifyControl::kContinue;
+        }
+
+        for (
+            auto* event = *eventList;
+            event != nullptr;
+            event = event->next)
+        {
+            if (
+                *event->eventType !=
+                    RE::INPUT_EVENT_TYPE::kButton ||
+                *event->device !=
+                    RE::INPUT_DEVICE::kKeyboard)
+            {
+                continue;
+            }
+
+            auto* button =
+                event->As<RE::ButtonEvent>();
+
+            if (
+                button == nullptr ||
+                button->idCode != debugDecodeKey ||
+                !button->JustPressed())
+            {
+                continue;
+            }
+
+            REX::DEBUG(
+                "Debug decode hotkey pressed."
+            );
+
+            startDebugDecode();
+
+            break;
+        }
+
+        return RE::BSEventNotifyControl::kContinue;
+    }
+
+private:
+    DebugInputSink() = default;
+};
+
+
+void registerDebugInput()
+{
+    auto* inputManager =
+        RE::BSInputDeviceManager::GetSingleton();
+
+    if (inputManager == nullptr)
+    {
+        REX::ERROR(
+            "Failed to register debug decode hotkey: "
+            "input manager unavailable."
+        );
+
+        return;
+    }
+
+    inputManager->AddEventSink(
+        DebugInputSink::GetSingleton()
+    );
+
+    REX::DEBUG(
+        "Debug decode hotkey registered: F10."
+    );
 }
 
     F4SE_PLUGIN_QUERY(const F4SE::QueryInterface* a_f4se, F4SE::PluginInfo* a_info)
