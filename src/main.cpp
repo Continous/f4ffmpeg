@@ -92,12 +92,6 @@ namespace Main
 
 		switch (message->type)
 		{
-			case F4SE::MessagingInterface::kInputLoaded:
-			{
-				registerDebugInput();
-				break;
-			}
-
 			case F4SE::MessagingInterface::kGameDataReady:
 			{
 				if (!isGameReady)
@@ -110,6 +104,7 @@ namespace Main
 					);
 
 					initF4ffmpeg();
+					registerDebugInput();
 				}
 
 				break;

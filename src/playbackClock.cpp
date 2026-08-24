@@ -1,44 +1,29 @@
 #include "pch.h"
 
 #include "playbackClock.h"
-
-#include <algorithm>
 #include <cmath>
 
 namespace f4ffmpeg
 {
     namespace
     {
-        constexpr double secondsPerDay =
-            86400.0;
-
-        // Calendar is float-backed and therefore not
-        // precise enough to use tiny discontinuity
-        // thresholds safely.
-        //
-        // A discontinuity of more than one world-minute
-        // beyond expected timescale progression is large
-        // enough to strongly imply wait/sleep/etc.
-        constexpr double worldJumpThreshold =
-            60.0;
+        constexpr double secondsPerHour =
+            3600.0;
 
         constexpr double timeScaleEpsilon =
             0.001;
 
-        double sanitizeDelta(
-            float value)
+        double sanitizeElapsed(
+            double value)
         {
-            const double delta =
-                static_cast<double>(value);
-
             if (
-                !std::isfinite(delta) ||
-                delta <= 0.0)
+                !std::isfinite(value) ||
+                value <= 0.0)
             {
                 return 0.0;
             }
 
-            return delta;
+            return value;
         }
     }
 
@@ -65,11 +50,6 @@ namespace f4ffmpeg
             std::scoped_lock lock(mutex);
 
             mode = newMode;
-
-            // If we enter hybrid mode later, establish
-            // a fresh Calendar baseline rather than
-            // interpreting the mode change as a jump.
-            calendarBaselineValid = false;
         }
 
         condition.notify_all();
@@ -161,222 +141,138 @@ namespace f4ffmpeg
         return true;
     }
 
-    bool playbackClock::update(
-        std::uint64_t expectedTimerTime)
+    void playbackClock::update(
+        double realSecondsElapsed,
+        double gameHoursElapsed,
+        double timeScale,
+        bool discontinuity)
     {
-        auto* timer =
-            RE::BSTimer::GetSingleton();
-
-        if (
-            timer == nullptr ||
-            timer->lastTime != expectedTimerTime)
-        {
-            return false;
-        }
-
-        const double gameDelta =
-            sanitizeDelta(
-                timer->delta
+        const double realAdvance =
+            sanitizeElapsed(
+                realSecondsElapsed
             );
 
-        const double realDelta =
-            sanitizeDelta(
-                timer->realTimeDelta
+        const double gameHours =
+            sanitizeElapsed(
+                gameHoursElapsed
             );
 
-        auto* calendar =
-            RE::Calendar::GetSingleton();
+        const double worldSeconds =
+            gameHours *
+            secondsPerHour;
 
-        bool calendarValid = false;
+        const bool timeScaleValid =
+            std::isfinite(timeScale) &&
+            std::abs(timeScale) >
+                timeScaleEpsilon;
 
-        double daysPassed = 0.0;
-        double timeScale = 1.0;
-
-        if (
-            calendar != nullptr &&
-            calendar->gameDaysPassed != nullptr &&
-            calendar->timeScale != nullptr)
-        {
-            daysPassed =
-                static_cast<double>(
-                    calendar
-                        ->gameDaysPassed
-                        ->GetValue()
-                );
-
-            timeScale =
-                static_cast<double>(
-                    calendar
-                        ->timeScale
-                        ->GetValue()
-                );
-
-            calendarValid =
-                std::isfinite(daysPassed) &&
-                std::isfinite(timeScale) &&
-                std::abs(timeScale) >
-                    timeScaleEpsilon;
-        }
-
-        bool worldJumpDetected = false;
-        double detectedWorldJump = 0.0;
-        double expectedWorldAdvance = 0.0;
+        double normalGameAdvance = 0.0;
 
         if (
-            timer->lastTime !=
-                expectedTimerTime)
+            worldSeconds > 0.0 &&
+            timeScaleValid)
         {
-            return false;
+            normalGameAdvance =
+                worldSeconds /
+                std::abs(timeScale);
         }
+
+        bool clockAdvanced = false;
+        bool hybridDiscontinuity = false;
+
+        double advance = 0.0;
 
         {
             std::scoped_lock lock(mutex);
-
-            ++updateCount;
-
-            double advance = 0.0;
 
             switch (mode)
             {
                 case playbackClockMode::realtime:
                 {
                     advance =
-                        realDelta;
+                        realAdvance;
 
                     break;
                 }
 
                 case playbackClockMode::game:
                 {
-                    advance =
-                        gameDelta;
+                    /*
+                    * Game mode follows ordinary Calendar
+                    * progression, normalized by timescale.
+                    *
+                    * Explicit Calendar discontinuities such
+                    * as wait/sleep/fast travel are ignored.
+                    */
+                    if (!discontinuity)
+                    {
+                        advance =
+                            normalGameAdvance;
+                    }
 
                     break;
                 }
 
                 case playbackClockMode::hybrid:
                 {
-                    advance =
-                        gameDelta;
-
-                    if (!calendarValid)
+                    if (
+                        discontinuity &&
+                        worldSeconds > 0.0)
                     {
-                        calendarBaselineValid =
-                            false;
+                        /*
+                        * Hybrid mode considers discontinuous
+                        * world-time advancement to have
+                        * elapsed for playback.
+                        */
+                        advance =
+                            worldSeconds;
 
-                        break;
-                    }
-
-                    if (!calendarBaselineValid)
-                    {
-                        lastDaysPassed =
-                            daysPassed;
-
-                        lastTimeScale =
-                            timeScale;
-
-                        calendarBaselineValid =
+                        hybridDiscontinuity =
                             true;
 
-                        break;
+                        ++discontinuityCount;
                     }
-
-                    const bool timeScaleChanged =
-                        std::abs(
-                            timeScale -
-                            lastTimeScale
-                        ) >
-                        timeScaleEpsilon;
-
-                    const double worldDelta =
-                        (
-                            daysPassed -
-                            lastDaysPassed
-                        ) *
-                        secondsPerDay;
-
-                    if (
-                        !timeScaleChanged &&
-                        worldDelta > 0.0)
+                    else
                     {
-                        // Determine how much world time
-                        // should reasonably have elapsed
-                        // during this Fallout update at
-                        // the current timescale.
-                        //
-                        // Using the larger delta prevents
-                        // things like VATS/global timer
-                        // manipulation from looking like a
-                        // Calendar discontinuity.
-                        const double expectedDelta =
-                            std::max(
-                                gameDelta,
-                                realDelta
-                            );
-
-                        expectedWorldAdvance =
-                            expectedDelta *
-                            std::abs(timeScale);
-
-                        const double unexpectedAdvance =
-                            worldDelta -
-                            expectedWorldAdvance;
-
-                        if (
-                            unexpectedAdvance >
-                            worldJumpThreshold)
-                        {
-                            // Wait/sleep/etc. advanced
-                            // Fallout's world clock
-                            // discontinuously.
-                            //
-                            // In hybrid mode we consider
-                            // that world time to have
-                            // elapsed for the video too.
-                            advance =
-                                worldDelta;
-
-                            worldJumpDetected =
-                                true;
-
-                            detectedWorldJump =
-                                worldDelta;
-
-                            ++discontinuityCount;
-                        }
+                        advance =
+                            normalGameAdvance;
                     }
-
-                    lastDaysPassed =
-                        daysPassed;
-
-                    lastTimeScale =
-                        timeScale;
 
                     break;
                 }
             }
+
             if (
                 std::isfinite(advance) &&
                 advance > 0.0)
             {
                 clockTime +=
                     advance;
+
+                ++updateCount;
+
+                clockAdvanced =
+                    true;
             }
         }
 
-        if (worldJumpDetected)
+        if (hybridDiscontinuity)
         {
             REX::DEBUG(
-                "Playback clock detected a world-time "
-                "discontinuity of {:.3f}s "
-                "(expected {:.3f}s at timescale {:.3f}).",
-                detectedWorldJump,
-                expectedWorldAdvance,
+                "Playback clock accepted Calendar "
+                "discontinuity of {:.3f} game hours "
+                "({:.3f}s world time, "
+                "timescale {:.3f}).",
+                gameHours,
+                worldSeconds,
                 timeScale
             );
         }
-        condition.notify_all();
-        return true;
+
+        if (clockAdvanced)
+        {
+            condition.notify_all();
+        }
     }
 
 

@@ -4,6 +4,7 @@
 #include "playbackClock.h"
 
 #include <chrono>
+#include <cmath>
 
 namespace f4ffmpeg
 {
@@ -47,77 +48,189 @@ namespace f4ffmpeg
         return true;
     }
 
+void playbackClockSource::run()
+{
+    constexpr double discontinuityThresholdHours =
+        0.75;
 
-    void playbackClockSource::run()
+    bool baselineValid = false;
+
+    std::uint32_t previousMidnights = 0;
+    double previousHour = 0.0;
+
+    auto previousRealTime =
+        std::chrono::steady_clock::now();
+
+    while (!stopRequested.load(
+        std::memory_order_acquire))
     {
-        bool baselineValid = false;
+        const auto currentRealTime =
+            std::chrono::steady_clock::now();
 
+        const double realSecondsElapsed =
+            std::chrono::duration<double>(
+                currentRealTime -
+                previousRealTime
+            ).count();
 
-        std::uint64_t lastTimerTime =
-            0;
+        previousRealTime =
+            currentRealTime;
 
+        auto* calendar =
+            RE::Calendar::GetSingleton();
 
-        while (!stopRequested.load(
-            std::memory_order_acquire))
+        if (
+            calendar == nullptr ||
+            calendar->gameHour == nullptr ||
+            calendar->timeScale == nullptr)
         {
-            auto* timer =
-                RE::BSTimer::GetSingleton();
+            baselineValid = false;
 
-            if (timer != nullptr)
-            {
-                const auto timerTime =
-                    timer->lastTime;
-
-                if (!baselineValid)
-                {
-                    lastTimerTime =
-                        timerTime;
-
-                    baselineValid =
-                        true;
-
-                    REX::TRACE(
-                        "Playback clock source "
-                        "established BSTimer baseline: {}.",
-                        timerTime
-                    );
-                }
-                else if (
-                    timerTime !=
-                    lastTimerTime)
-                {
-
-                    REX::TRACE(
-                        "BSTimer update observed: {} -> {}.",
-                        lastTimerTime,
-                        timerTime
-                    );
-
-                    if (
-                        playbackClock::get()
-                        .update(timerTime))
-                    {
-                        lastTimerTime =
-                        timerTime;
-                    }
-                }
-            }
-            else
-            {
-                baselineValid =
-                    false;
-            }
+            playbackClock::get()
+                .update(
+                    realSecondsElapsed,
+                    0.0,
+                    0.0,
+                    false
+                );
 
             std::this_thread::sleep_for(
                 std::chrono::milliseconds(2)
             );
+
+            continue;
         }
 
-        running.store(
-            false,
-            std::memory_order_release
+        const std::uint32_t currentMidnights =
+            calendar->midnightsPassed;
+
+        const double currentHour =
+            static_cast<double>(
+                calendar->gameHour->GetValue()
+            );
+
+        const double timeScale =
+            static_cast<double>(
+                calendar->timeScale->GetValue()
+            );
+
+        if (
+            !std::isfinite(currentHour) ||
+            !std::isfinite(timeScale))
+        {
+            baselineValid = false;
+
+            playbackClock::get()
+                .update(
+                    realSecondsElapsed,
+                    0.0,
+                    0.0,
+                    false
+                );
+
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(2)
+            );
+
+            continue;
+        }
+
+        double gameHoursElapsed = 0.0;
+        bool discontinuity = false;
+
+        if (!baselineValid)
+        {
+            previousMidnights =
+                currentMidnights;
+
+            previousHour =
+                currentHour;
+
+            baselineValid =
+                true;
+
+            REX::TRACE(
+                "Playback clock source established "
+                "Calendar baseline: midnight={}, "
+                "hour={:.6f}, timescale={:.3f}.",
+                currentMidnights,
+                currentHour,
+                timeScale
+            );
+        }
+        else
+        {
+            const auto midnightDelta =
+                static_cast<std::int64_t>(
+                    currentMidnights
+                ) -
+                static_cast<std::int64_t>(
+                    previousMidnights
+                );
+
+            const double calendarDelta =
+                (
+                    currentHour -
+                    previousHour
+                ) +
+                (
+                    static_cast<double>(
+                        midnightDelta
+                    ) *
+                    24.0
+                );
+
+            /*
+             * Always consume the current sample.
+             * A backwards jump establishes a new baseline
+             * without advancing playback.
+             */
+            previousMidnights =
+                currentMidnights;
+
+            previousHour =
+                currentHour;
+
+            if (calendarDelta > 0.0)
+            {
+                gameHoursElapsed =
+                    calendarDelta;
+
+                discontinuity =
+                    gameHoursElapsed >
+                        discontinuityThresholdHours;
+
+                REX::TRACE(
+                    "Calendar advanced {:.6f} game hours "
+                    "(midnight={}, hour={:.6f}, "
+                    "timescale={:.3f}, discontinuity={}).",
+                    gameHoursElapsed,
+                    currentMidnights,
+                    currentHour,
+                    timeScale,
+                    discontinuity
+                );
+            }
+        }
+
+        playbackClock::get()
+            .update(
+                realSecondsElapsed,
+                gameHoursElapsed,
+                timeScale,
+                discontinuity
+            );
+
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(2)
         );
     }
+
+    running.store(
+        false,
+        std::memory_order_release
+    );
+}
 
 
     void playbackClockSource::stop()

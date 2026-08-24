@@ -44,8 +44,11 @@ namespace f4ffmpeg
         playbackClockMode getMode() const;
 
         // Fallout gameplay update point. Handled by playbackClockSource
-        bool update(
-            std::uint64_t expectedTimerTime
+        void update(
+            double realSecondsElapsed,
+            double gameHoursElapsed,
+            double timeScale,
+            bool discontinuity
         );
 
         // Absolute f4ffmpeg clock time, in seconds.
@@ -86,10 +89,5 @@ namespace f4ffmpeg
             playbackClockMode::hybrid;
 
         double clockTime = 0.0;
-
-        bool calendarBaselineValid = false;
-
-        double lastDaysPassed = 0.0;
-        double lastTimeScale = 1.0;
     };
 }
