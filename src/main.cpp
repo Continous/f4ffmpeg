@@ -37,8 +37,13 @@ namespace Main
 	static std::shared_ptr<f4ffmpeg::manager>
     testManager;
 
+    constexpr std::uint32_t debugDecodeKey =
+        0x44; // F10
+
 	void onF4SEMessage(F4SE::MessagingInterface::Message* message);
 	void initF4ffmpeg();
+    void startDebugDecode();
+    void registerDebugInput();
 
 
     bool InitPlugin(const F4SE::LoadInterface* a_f4se)
@@ -224,24 +229,56 @@ void initF4ffmpeg()
 				codec.backend
 			);
 		}
-		testManager =
-		f4ffmpeg::createManager(
-			"Data/Video/f4ffmpeg/test.mp4",
-			false
-		);
-		if (testManager)
-		{
-			REX::DEBUG(
-				"Test manager started successfully."
-			);
-		}
-		else
-		{
-			REX::ERROR(
-				"Failed to start test manager."
-			);
-		}
-	}
+}
+
+void startDebugDecode()
+{
+    if (
+        !isGameReady ||
+        !isF4ffmpegGraphics)
+    {
+        REX::WARN(
+            "Debug decode requested before "
+            "f4ffmpeg was graphics ready."
+        );
+
+        return;
+    }
+
+    if (testManager)
+    {
+        REX::DEBUG(
+            "Stopping existing debug decode."
+        );
+
+        testManager->stop();
+        testManager.reset();
+    }
+
+    REX::INFO(
+        "Starting debug decode."
+    );
+
+    testManager =
+        f4ffmpeg::createManager(
+            "Data/Video/f4ffmpeg/test.mp4",
+            false
+        );
+
+    if (testManager)
+    {
+        REX::INFO(
+            "Debug decode manager started."
+        );
+    }
+    else
+    {
+        REX::ERROR(
+            "Failed to start debug decode manager."
+        );
+    }
+}
+
     F4SE_PLUGIN_QUERY(const F4SE::QueryInterface* a_f4se, F4SE::PluginInfo* a_info)
     {
         if (const auto data = F4SE::PluginVersionData::GetSingleton())
