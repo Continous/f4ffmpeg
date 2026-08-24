@@ -349,10 +349,18 @@ public:
 			auto* button =
 				event->As<RE::ButtonEvent>();
 
+			if (button == nullptr)
+			{
+				continue;
+			}
+
+			const bool justPressed =
+				button->value > 0.0f &&
+				button->heldDownSecs <= 0.000001f;
+
 			if (
-				button == nullptr ||
 				button->idCode != debugDecodeKey ||
-				!button->JustPressed())
+				!justPressed)
 			{
 				continue;
 			}
