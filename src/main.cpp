@@ -39,7 +39,7 @@ namespace Main
     testManager;
 
     constexpr std::uint32_t debugDecodeKey =
-        0x44; // F10
+		RE::BS_BUTTON_CODE::kF10;
 
 	void onF4SEMessage(F4SE::MessagingInterface::Message* message);
 	void initF4ffmpeg();
