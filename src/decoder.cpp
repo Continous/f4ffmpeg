@@ -14,11 +14,30 @@ extern "C"
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/pixdesc.h>
+#include <libavutil/hwcontext_vulkan.h>
 #include <libavutil/log.h>
 }
 
 namespace f4ffmpeg
 {
+
+struct producedFrameVulkanState
+{
+    VkDevice device =
+        VK_NULL_HANDLE;
+
+    VkImage image =
+        VK_NULL_HANDLE;
+
+    VkDeviceMemory memory =
+        VK_NULL_HANDLE;
+
+    VkImageView view =
+        VK_NULL_HANDLE;
+
+    HANDLE sharedHandle =
+        nullptr;
+};
 
 namespace {
 
@@ -512,14 +531,30 @@ bool decoder::initializeHardwareDevice(
             : "unknown"
     );
 
+    AVDictionary* options = nullptr;
+
+    if (deviceType == AV_HWDEVICE_TYPE_VULKAN)
+    {
+        av_dict_set(
+            &options,
+            "device_extensions",
+            "VK_KHR_win32_keyed_mutex",
+            0
+        );
+    }
+
     const int result =
         av_hwdevice_ctx_create(
             &hardwareDeviceContext,
             deviceType,
             nullptr,
-            nullptr,
+            options,
             0
         );
+
+    av_dict_free(
+        &options
+    );
 
     if (result < 0)
     {
@@ -606,7 +641,8 @@ void decoder::clearProducedFrames()
 }
 
 std::shared_ptr<producedFrame>
-decoder::frameProduce(const AVFrame* frame)
+decoder::frameProduce(
+    const AVFrame* frame)
 {
     if (frame == nullptr)
         return nullptr;
@@ -614,22 +650,93 @@ decoder::frameProduce(const AVFrame* frame)
     auto output =
         acquireProducedFrame(
             frame->width,
-            frame->height);
+            frame->height
+        );
 
     if (!output)
         return nullptr;
 
-    if (frame->format == AV_PIX_FMT_VULKAN) {
-        if (!frameProduceVulkan(frame, *output))
-            return nullptr;
+    const bool vulkan =
+        frame->format ==
+            AV_PIX_FMT_VULKAN;
+
+    const bool d3d11 =
+        frame->format ==
+            AV_PIX_FMT_D3D11;
+
+    bool produced = false;
+
+    if (vulkan)
+    {
+        produced =
+            frameProduceVulkan(
+                frame,
+                *output
+            );
     }
-    else if (frame->format == AV_PIX_FMT_D3D11) {
-        if (!frameProduceD3D11(frame, *output))
-            return nullptr;
+    else if (d3d11)
+    {
+        produced =
+            frameProduceD3D11(
+                frame,
+                *output
+            );
     }
-    else {
+
+    const auto dumpGeneration =
+        frameDumpGeneration.load(
+            std::memory_order_acquire
+        );
+
+    if (
+        dumpGeneration !=
+            handledProducedFrameDumpGeneration)
+    {
+        handledProducedFrameDumpGeneration =
+            dumpGeneration;
+
+        std::string basePath;
+
+        {
+            std::scoped_lock lock(
+                frameDumpPathMutex
+            );
+
+            basePath =
+                frameDumpPath;
+        }
+
+        if (produced)
+        {
+            const auto outputPath =
+                makeFrameDumpPath(
+                    basePath,
+                    vulkan
+                        ? "vulkan"
+                        : "d3d11"
+                );
+
+            if (!dumpProducedFrame(
+                    *output,
+                    outputPath.c_str()))
+            {
+                REX::WARN(
+                    "Produced frame asset "
+                    "was not dumped."
+                );
+            }
+        }
+        else
+        {
+            REX::DEBUG(
+                "Produced frame dump skipped: "
+                "no produced frame asset exists."
+            );
+        }
+    }
+
+    if (!produced)
         return nullptr;
-    }
 
     return output;
 }
@@ -734,15 +841,58 @@ bool decoder::frameProduceVulkan(
     if (
         frame == nullptr ||
         output.texture == nullptr ||
-        frame->format != AV_PIX_FMT_VULKAN)
+        frame->format != AV_PIX_FMT_VULKAN ||
+        frame->data[0] == nullptr ||
+        frame->hw_frames_ctx == nullptr)
     {
         return false;
     }
 
-    // TODO:
-    // Import output.texture into Vulkan.
-    // Copy normalized FFmpeg Vulkan frame into it.
-    // Synchronize ownership/access.
+    auto* vkFrame =
+        reinterpret_cast<AVVkFrame*>(
+            frame->data[0]
+        );
+
+    auto* framesContext =
+        reinterpret_cast<AVHWFramesContext*>(
+            frame->hw_frames_ctx->data
+        );
+
+    if (
+        framesContext == nullptr ||
+        framesContext->device_ctx == nullptr ||
+        framesContext->hwctx == nullptr)
+    {
+        return false;
+    }
+
+    auto* vkFramesContext =
+        static_cast<AVVulkanFramesContext*>(
+            framesContext->hwctx
+        );
+
+    auto* vkDeviceContext =
+        static_cast<AVVulkanDeviceContext*>(
+            framesContext->device_ctx->hwctx
+        );
+
+    if (
+        vkFrame == nullptr ||
+        vkFramesContext == nullptr ||
+        vkDeviceContext == nullptr)
+    {
+        return false;
+    }
+
+    REX::TRACE(
+        "Producing Vulkan frame: "
+        "{}x{}, VkImage={}",
+        frame->width,
+        frame->height,
+        reinterpret_cast<void*>(
+            vkFrame->img[0]
+        )
+    );
 
     return false;
 }
@@ -862,30 +1012,37 @@ decodeResult decoder::decodeNextFrame(
             frameDumpGeneration.load(
                 std::memory_order_acquire
             );
+
         if (
             dumpGeneration !=
-                handledFrameDumpGeneration)
+                handledDecodedFrameDumpGeneration)
         {
-            handledFrameDumpGeneration =
+            handledDecodedFrameDumpGeneration =
                 dumpGeneration;
 
-            std::string outputPath;
+            std::string basePath;
 
             {
                 std::scoped_lock lock(
                     frameDumpPathMutex
                 );
 
-                outputPath =
+                basePath =
                     frameDumpPath;
             }
+
+            const auto outputPath =
+                makeFrameDumpPath(
+                    basePath,
+                    "decoded"
+                );
 
             if (!dumpDecodedFrame(
                     *outputFrame,
                     outputPath.c_str()))
             {
-                REX::ERROR(
-                    "Failed to dump decoded frame."
+                REX::WARN(
+                    "Decoded frame asset was not dumped."
                 );
             }
         }

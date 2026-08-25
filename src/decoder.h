@@ -55,6 +55,11 @@ namespace f4ffmpeg
 
         double timestamp = -1.0;
 
+        std::unique_ptr<
+        producedFrameVulkanState
+        > vulkanState;
+
+
         ~producedFrame();
     };
 
