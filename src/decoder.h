@@ -15,6 +15,9 @@ extern "C"
 
 namespace f4ffmpeg
 {
+
+    struct producedFrameVulkanState;
+
     void initializeFFmpegLogging();
 
     void frameDump(

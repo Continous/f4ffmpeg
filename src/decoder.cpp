@@ -39,6 +39,26 @@ struct producedFrameVulkanState
         nullptr;
 };
 
+
+std::string makeFrameDumpPath(
+    const std::string& basePath,
+    const char* suffix)
+{
+    const std::filesystem::path path{
+        basePath
+    };
+
+    return (
+        path.parent_path() /
+        (
+            path.stem().string() +
+            "_" +
+            suffix +
+            path.extension().string()
+        )
+    ).string();
+}
+
 namespace {
 
     bool writeTga(
@@ -48,6 +68,190 @@ namespace {
         int height,
         int stride
     );
+
+bool dumpProducedFrame(
+    const producedFrame& frame,
+    const char* outputPath)
+{
+    if (
+        frame.texture == nullptr ||
+        outputPath == nullptr ||
+        frame.width == 0 ||
+        frame.height == 0)
+    {
+        return false;
+    }
+
+    auto* device =
+        getD3D11Device();
+
+    auto* context =
+        getD3D11DeviceContext();
+
+    if (
+        device == nullptr ||
+        context == nullptr)
+    {
+        return false;
+    }
+
+    REX::INFO(
+        "Writing produced frame dump to {}",
+        outputPath
+    );
+
+    // The produced texture is GPU-only, so make a CPU-readable staging texture.
+
+    REX::W32::D3D11_TEXTURE2D_DESC desc{};
+    frame.texture->GetDesc(
+        &desc
+    );
+
+    REX::W32::D3D11_TEXTURE2D_DESC stagingDesc =
+        desc;
+
+    stagingDesc.usage =
+        REX::W32::D3D11_USAGE_STAGING;
+
+    stagingDesc.bindFlags = 0;
+
+    stagingDesc.cpuAccessFlags =
+        REX::W32::D3D11_CPU_ACCESS_READ;
+
+    // Staging resources cannot retain the shared/keyed-mutex flags.
+    stagingDesc.miscFlags = 0;
+
+    REX::W32::ID3D11Texture2D*
+        stagingTexture = nullptr;
+
+    const auto createResult =
+        device->CreateTexture2D(
+            &stagingDesc,
+            nullptr,
+            &stagingTexture
+        );
+
+    if (
+        createResult < 0 ||
+        stagingTexture == nullptr)
+    {
+        REX::WARN(
+            "Failed to create produced-frame "
+            "staging texture: 0x{:08X}",
+            static_cast<std::uint32_t>(
+                createResult
+            )
+        );
+
+        return false;
+    }
+
+    // GPU texture -> CPU-readable staging texture.
+
+    context->CopyResource(
+        stagingTexture,
+        frame.texture
+    );
+
+    REX::W32::D3D11_MAPPED_SUBRESOURCE
+        mapped{};
+
+    const auto mapResult =
+        context->Map(
+            stagingTexture,
+            0,
+            REX::W32::D3D11_MAP_READ,
+            0,
+            &mapped
+        );
+
+    if (mapResult < 0)
+    {
+        REX::WARN(
+            "Failed to map produced-frame "
+            "staging texture: 0x{:08X}",
+            static_cast<std::uint32_t>(
+                mapResult
+            )
+        );
+
+        stagingTexture->Release();
+
+        return false;
+    }
+
+    // Our canonical texture is RGBA8. TGA expects B,G,R,A byte ordering.
+
+    const int stride =
+        static_cast<int>(
+            frame.width * 4
+        );
+
+    std::vector<std::uint8_t> pixels(
+        static_cast<std::size_t>(stride) *
+        static_cast<std::size_t>(
+            frame.height
+        )
+    );
+
+    for (
+        std::uint32_t y = 0;
+        y < frame.height;
+        ++y)
+    {
+        const auto* source =
+            static_cast<const std::uint8_t*>(
+                mapped.data
+            ) +
+            static_cast<std::size_t>(y) *
+                mapped.rowPitch;
+
+        auto* destination =
+            pixels.data() +
+            static_cast<std::size_t>(y) *
+                stride;
+
+        for (
+            std::uint32_t x = 0;
+            x < frame.width;
+            ++x)
+        {
+            destination[0] =
+                source[2]; // B
+
+            destination[1] =
+                source[1]; // G
+
+            destination[2] =
+                source[0]; // R
+
+            destination[3] =
+                source[3]; // A
+
+            source += 4;
+            destination += 4;
+        }
+    }
+
+    context->Unmap(
+        stagingTexture,
+        0
+    );
+
+    stagingTexture->Release();
+
+    return writeTga(
+        outputPath,
+        pixels.data(),
+        static_cast<int>(
+            frame.width
+        ),
+        static_cast<int>(
+            frame.height
+        ),
+        stride
+    );
+}
 
 bool dumpDecodedFrame(
         const AVFrame& frame,
@@ -1409,10 +1613,16 @@ bool decoder::initializeVideoDecoder()
             return false;
         }
 
-        handledFrameDumpGeneration =
+        const auto dumpGeneration =
             frameDumpGeneration.load(
                 std::memory_order_acquire
             );
+
+        handledDecodedFrameDumpGeneration =
+            dumpGeneration;
+
+        handledProducedFrameDumpGeneration =
+            dumpGeneration;
 
         return true;
     }
@@ -1471,7 +1681,6 @@ bool decoder::initializeVideoDecoder()
         }
     }
 
-    struct producedFrameVulkanState;
 
     void initializeFFmpegLogging()
     {
