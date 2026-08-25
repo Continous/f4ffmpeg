@@ -5,6 +5,8 @@
 #include "pch.h"
 #include "graphics.h"
 #include <cmath>
+#include <filesystem>
+#include <unordered_map>
 
 extern "C"
 {
@@ -20,7 +22,12 @@ namespace f4ffmpeg
 
 namespace {
 
+    std::mutex frameDumpRegistryMutex;
 
+    std::unordered_map<
+        const decoder*,
+        std::weak_ptr<producedFrame>
+    > latestProducedFrames;
 
     AVPixelFormat getHardwareFormat(
         AVCodecContext* codecContext,
@@ -402,9 +409,21 @@ decoder::acquireProducedFrame(
 
 void decoder::clearProducedFrames()
 {
-    std::scoped_lock lock(producedFramesMutex);
+    {
+        std::scoped_lock lock(
+            frameDumpRegistryMutex
+        );
 
-    producedFrames.clear();
+        latestProducedFrames.erase(this);
+    }
+
+    {
+        std::scoped_lock lock(
+            producedFramesMutex
+        );
+
+        producedFrames.clear();
+    }
 }
 
 std::shared_ptr<producedFrame>
@@ -432,6 +451,15 @@ decoder::frameProduce(const AVFrame* frame)
     else {
         return nullptr;
     }
+    {
+    std::scoped_lock lock(
+        frameDumpRegistryMutex
+    );
+
+    latestProducedFrames[this] =
+        output;
+    }
+
 
     return output;
 }
@@ -568,10 +596,12 @@ bool decoder::frameProduceD3D11(
     return false;
 }
 
-bool decoder::frameDump(
-    const producedFrame& frame,
-    const char* outputPath)
+namespace // Yeet frame into a tga
 {
+    bool dumpProducedFrame(
+        const producedFrame& frame,
+        const char* outputPath)
+    {
     if (
         frame.texture == nullptr ||
         outputPath == nullptr)
@@ -691,6 +721,103 @@ bool decoder::frameDump(
         stride
     );
     }
+}
+
+std::size_t frameDump(
+    const char* outputPath)
+{
+    if (outputPath == nullptr)
+    {
+        return 0;
+    }
+
+    std::vector<
+        std::shared_ptr<producedFrame>
+    > frames;
+
+    {
+        std::scoped_lock lock(
+            frameDumpRegistryMutex
+        );
+
+        for (
+            auto it = latestProducedFrames.begin();
+            it != latestProducedFrames.end();)
+        {
+            auto frame =
+                it->second.lock();
+
+            if (!frame)
+            {
+                it =
+                    latestProducedFrames.erase(it);
+
+                continue;
+            }
+
+            frames.emplace_back(
+                std::move(frame)
+            );
+
+            ++it;
+        }
+    }
+
+    if (frames.empty())
+    {
+        REX::INFO(
+            "Frame dump requested, but no produced frames are available."
+        );
+
+        return 0;
+    }
+
+    const std::filesystem::path basePath{
+        outputPath
+    };
+
+    std::size_t dumped = 0;
+
+    for (
+        std::size_t index = 0;
+        index < frames.size();
+        ++index)
+    {
+        const auto indexedPath =
+            basePath.parent_path() /
+            (
+                basePath.stem().string() +
+                "_" +
+                std::to_string(index) +
+                basePath.extension().string()
+            );
+
+        const auto indexedPathString =
+            indexedPath.string();
+
+        if (dumpProducedFrame(
+                *frames[index],
+                indexedPathString.c_str()))
+        {
+            ++dumped;
+        }
+        else
+        {
+            REX::WARN(
+                "Failed to dump frame {}.",
+                index
+            );
+        }
+    }
+
+    REX::INFO(
+        "Frame dump completed: {}/{} frames written.",
+        dumped,
+        frames.size()
+    );
+
+    return dumped;
+}
 
 double decoder::getFrameTimestamp(
     const AVFrame* frame) const

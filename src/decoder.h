@@ -4,6 +4,7 @@
 #include <memory>
 #include <mutex>
 #include <vector>
+#include <cstddef>
 
 extern "C"
 {
@@ -15,6 +16,10 @@ extern "C"
 namespace f4ffmpeg
 {
     void initializeFFmpegLogging();
+
+    std::size_t frameDump(
+    const char* outputPath
+    );
 
     enum class decodeStatus
     {
@@ -63,11 +68,6 @@ namespace f4ffmpeg
 
         std::shared_ptr<producedFrame>
         frameProduce(const AVFrame* frame);
-
-        bool frameDump(
-            const producedFrame& frame,
-            const char* outputPath
-        );
 
         bool initializeVideoDecoder();
 
