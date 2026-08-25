@@ -27,8 +27,13 @@ namespace f4ffmpeg
 
 struct producedFrameVulkanState
 {
+    AVBufferRef* deviceRef = nullptr;
+
     VkDevice device =
         VK_NULL_HANDLE;
+
+    const VkAllocationCallbacks* allocator =
+        nullptr;
 
     VkImage image =
         VK_NULL_HANDLE;
@@ -41,6 +46,64 @@ struct producedFrameVulkanState
 
     HANDLE sharedHandle =
         nullptr;
+
+    PFN_vkDestroyImage destroyImage =
+        nullptr;
+
+    PFN_vkDestroyImageView destroyImageView =
+        nullptr;
+
+    PFN_vkFreeMemory freeMemory =
+        nullptr;
+
+    ~producedFrameVulkanState()
+    {
+        if (
+            view != VK_NULL_HANDLE &&
+            destroyImageView != nullptr)
+        {
+            destroyImageView(
+                device,
+                view,
+                allocator
+            );
+        }
+
+        if (
+            image != VK_NULL_HANDLE &&
+            destroyImage != nullptr)
+        {
+            destroyImage(
+                device,
+                image,
+                allocator
+            );
+        }
+
+        if (
+            memory != VK_NULL_HANDLE &&
+            freeMemory != nullptr)
+        {
+            freeMemory(
+                device,
+                memory,
+                allocator
+            );
+        }
+
+        if (sharedHandle != nullptr)
+        {
+            ::CloseHandle(
+                sharedHandle
+            );
+
+            sharedHandle = nullptr;
+        }
+
+        av_buffer_unref(
+            &deviceRef
+        );
+    }
 };
 
 
@@ -950,6 +1013,8 @@ decoder::frameProduce(
 
 producedFrame::~producedFrame()
 {
+    vulkanState.reset();
+
     if (texture != nullptr)
     {
         texture->Release();
@@ -1091,17 +1156,60 @@ bool decoder::frameProduceVulkan(
         return false;
     }
 
+    if (!output.vulkanState)
+    {
+        if (!ensureProducedFrameVulkanState(
+                output,
+                *framesContext,
+                *vkDeviceContext))
+        {
+            return false;
+        }
+    }
+
+    auto& outputState =
+        *output.vulkanState;
+
     REX::TRACE(
-        "Producing Vulkan frame: "
-        "{}x{}, VkImage={}",
+        "Producing Vulkan frame: {}x{}, VkImage={}",
         frame->width,
         frame->height,
         reinterpret_cast<void*>(
             vkFrame->img[0]
         )
-    );
+    ); // Checkpoint, we've by this point proven a Vulkan decoded frame and it's state. From here on we are preparing to send it ownward to Fallout's D3D11 device.
 
-    return false;
+    if (!ensureVulkanRgbaSurface(
+            outputState,
+            *framesContext,
+            *vkFramesContext,
+            *vkDeviceContext,
+            frame->width,
+            frame->height))
+    {
+        return false;
+    }
+
+    if (!submitVulkanFrame(
+            *vkFrame,
+            *framesContext,
+            *vkFramesContext,
+            *vkDeviceContext,
+            outputState))
+    {
+        return false;
+    }
+
+    REX::TRACE(
+        "Submitting Vulkan RGBA surface: {}x{}, VkImage={}",
+        frame->width,
+        frame->height,
+        reinterpret_cast<void*>(
+            outputState.rgbaImage
+        )
+    ); // Final checkpoint where we can now confirm if we've properly converted.
+
+    return true;
 }
 
 bool decoder::frameProduceD3D11(
