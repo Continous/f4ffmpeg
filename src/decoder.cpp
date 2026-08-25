@@ -18,6 +18,10 @@ extern "C"
 #include <libavutil/log.h>
 }
 
+#ifdef ERROR
+#undef ERROR
+#endif
+
 namespace f4ffmpeg
 {
 
@@ -306,8 +310,7 @@ bool dumpDecodedFrame(
             if (transferResult < 0)
             {
                 REX::ERROR(
-                    "Failed to transfer hardware frame "
-                    "for dump: {}.",
+                    "Failed to transfer hardware frame for dump: {}.",
                     transferResult
                 );
 
