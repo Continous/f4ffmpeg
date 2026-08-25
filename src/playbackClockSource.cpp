@@ -51,7 +51,7 @@ namespace f4ffmpeg
 void playbackClockSource::run()
 {
     constexpr double discontinuityThresholdHours =
-        0.25; //Wait time increments in bursts of .25 game hours.
+        0.24; //Wait time increments in bursts of .25 game hours, we do a > check.
 
     bool baselineValid = false;
 

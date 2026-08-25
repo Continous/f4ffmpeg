@@ -407,6 +407,17 @@ decoder::acquireProducedFrame(
     return output;
 }
 
+
+namespace
+{
+    std::atomic<std::uint64_t>
+        frameDumpGeneration{0};
+
+    std::mutex frameDumpPathMutex;
+
+    std::string frameDumpPath;
+}
+
 void decoder::clearProducedFrames()
 {
     {
@@ -451,15 +462,6 @@ decoder::frameProduce(const AVFrame* frame)
     else {
         return nullptr;
     }
-    {
-    std::scoped_lock lock(
-        frameDumpRegistryMutex
-    );
-
-    latestProducedFrames[this] =
-        output;
-    }
-
 
     return output;
 }
@@ -723,100 +725,29 @@ namespace // Yeet frame into a tga
     }
 }
 
-std::size_t frameDump(
+void frameDump(
     const char* outputPath)
 {
     if (outputPath == nullptr)
-    {
-        return 0;
-    }
-
-    std::vector<
-        std::shared_ptr<producedFrame>
-    > frames;
+        return;
 
     {
         std::scoped_lock lock(
-            frameDumpRegistryMutex
+            frameDumpPathMutex
         );
 
-        for (
-            auto it = latestProducedFrames.begin();
-            it != latestProducedFrames.end();)
-        {
-            auto frame =
-                it->second.lock();
-
-            if (!frame)
-            {
-                it =
-                    latestProducedFrames.erase(it);
-
-                continue;
-            }
-
-            frames.emplace_back(
-                std::move(frame)
-            );
-
-            ++it;
-        }
+        frameDumpPath =
+            outputPath;
     }
 
-    if (frames.empty())
-    {
-        REX::INFO(
-            "Frame dump requested, but no produced frames are available."
-        );
-
-        return 0;
-    }
-
-    const std::filesystem::path basePath{
-        outputPath
-    };
-
-    std::size_t dumped = 0;
-
-    for (
-        std::size_t index = 0;
-        index < frames.size();
-        ++index)
-    {
-        const auto indexedPath =
-            basePath.parent_path() /
-            (
-                basePath.stem().string() +
-                "_" +
-                std::to_string(index) +
-                basePath.extension().string()
-            );
-
-        const auto indexedPathString =
-            indexedPath.string();
-
-        if (dumpProducedFrame(
-                *frames[index],
-                indexedPathString.c_str()))
-        {
-            ++dumped;
-        }
-        else
-        {
-            REX::WARN(
-                "Failed to dump frame {}.",
-                index
-            );
-        }
-    }
-
-    REX::INFO(
-        "Frame dump completed: {}/{} frames written.",
-        dumped,
-        frames.size()
+    frameDumpGeneration.fetch_add(
+        1,
+        std::memory_order_release
     );
 
-    return dumped;
+    REX::DEBUG(
+        "Decoded frame dump requested."
+    );
 }
 
 double decoder::getFrameTimestamp(
@@ -885,6 +816,21 @@ decodeResult decoder::decodeNextFrame(
         {
             currentTimestamp =
                 getFrameTimestamp(outputFrame); //Get timestamp of output frame rather than decoder frame.
+
+        const auto dumpGeneration =
+            frameDumpGeneration.load(
+                std::memory_order_acquire
+            );
+
+        if (
+            dumpGeneration !=
+                handledFrameDumpGeneration)
+        {
+            handledFrameDumpGeneration =
+                dumpGeneration;
+
+            // Dump this frame.
+        }
 
             return {
                 decodeStatus::frameReady,

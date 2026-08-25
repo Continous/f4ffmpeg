@@ -70,6 +70,7 @@ namespace Main
 		f4ffmpeg::frameDump(
 			outputPath.c_str()
 		);
+		REX::INFO("Frame dumped to {}", outputPath);
 	}
 
 
