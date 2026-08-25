@@ -88,7 +88,6 @@ namespace Main
 			auto* messaging = F4SE::GetMessagingInterface();
 
             REX::INFO("f4ffmpeg plugin initialized. Waiting for game to load... ");
-            f4ffmpeg::initializeNifHandler();
 
 			if (messaging != nullptr)
 			{
@@ -252,6 +251,8 @@ void initF4ffmpeg()
 		}
 		isF4ffmpegGraphics = true;
 		REX::INFO("f4ffmpeg is graphics ready!");
+
+        f4ffmpeg::initializeNifHandler();
 
 		auto reportedResults =
 			f4ffmpeg::testHardwareDevices();
