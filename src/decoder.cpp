@@ -442,7 +442,10 @@ namespace
 
         const auto queryResult =
             output.texture->QueryInterface(
-                &dxgiResource
+                REX::W32::IID_IDXGIResource1,
+                reinterpret_cast<void**>(
+                    &dxgiResource
+                )
             );
 
         if (
