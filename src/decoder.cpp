@@ -250,6 +250,7 @@ bool decoder::seek(
     {
         return false;
     }
+    REX::TRACE("Decoder is seeking");
 
     AVStream* stream =
         formatContext

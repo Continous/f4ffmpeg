@@ -22,5 +22,23 @@ namespace f4ffmpeg::config
         0.250
     };
 
+    inline REX::TTomlSetting<std::string> debugDecodeKey{
+        "Debug",
+        "DecodeKey",
+        "F10"
+    };
+
+    inline REX::TTomlSetting<std::string> debugFrameDumpKey{
+        "Debug",
+        "FrameDumpKey",
+        "F11"
+    };
+
+    inline REX::TTomlSetting<std::string> debugFrameDumpPath{
+        "Debug",
+        "FrameDumpPath",
+        "Data/f4ffmpeg/f4ffmpeg_framedump.tga"
+    };
+
     void initialize();
 }

@@ -20,6 +20,10 @@ extern "C"
 #include "manager.h"
 #include "producerWorker.h"
 #include "playbackClockSource.h"
+#include <algorithm>
+#include <array>
+#include <optional>
+#include <string_view>
 
 extern "C"
 __declspec(dllexport)
@@ -34,12 +38,115 @@ namespace Main
     static bool isInit = false;
 	static bool isGameReady = false;
 	static bool isF4ffmpegGraphics = false;
+	static bool frameDump(
+	const producedFrame& frame,
+	const char* outputPath
+	);
+
 
 	static std::shared_ptr<f4ffmpeg::manager>
     testManager;
 
-	constexpr RE::BS_BUTTON_CODE debugDecodeKey =
+	RE::BS_BUTTON_CODE debugDecodeKey =
 		RE::BS_BUTTON_CODE::kF10;
+
+	RE::BS_BUTTON_CODE debugFrameDumpKey =
+		RE::BS_BUTTON_CODE::kF11;
+
+	std::optional<RE::BS_BUTTON_CODE>
+	parseDebugKey(std::string_view key)
+	{
+		static constexpr std::array mappings{
+			std::pair{"F1",  RE::BS_BUTTON_CODE::kF1},
+			std::pair{"F2",  RE::BS_BUTTON_CODE::kF2},
+			std::pair{"F3",  RE::BS_BUTTON_CODE::kF3},
+			std::pair{"F4",  RE::BS_BUTTON_CODE::kF4},
+			std::pair{"F5",  RE::BS_BUTTON_CODE::kF5},
+			std::pair{"F6",  RE::BS_BUTTON_CODE::kF6},
+			std::pair{"F7",  RE::BS_BUTTON_CODE::kF7},
+			std::pair{"F8",  RE::BS_BUTTON_CODE::kF8},
+			std::pair{"F9",  RE::BS_BUTTON_CODE::kF9},
+			std::pair{"F10", RE::BS_BUTTON_CODE::kF10},
+			std::pair{"F11", RE::BS_BUTTON_CODE::kF11},
+			std::pair{"F12", RE::BS_BUTTON_CODE::kF12}
+		};
+
+		std::string normalized{key};
+
+		std::transform(
+			normalized.begin(),
+			normalized.end(),
+			normalized.begin(),
+			[](unsigned char c)
+			{
+				return static_cast<char>(std::toupper(c));
+			}
+		);
+
+		for (const auto& [name, code] : mappings)
+		{
+			if (normalized == name)
+			{
+				return code;
+			}
+		}
+
+		return std::nullopt;
+	}
+
+	const auto configuredDecodeKey =
+		f4ffmpeg::config::debugDecodeKey.GetValue();
+
+	if (const auto key = parseDebugKey(configuredDecodeKey))
+	{
+		debugDecodeKey = *key;
+	}
+	else
+	{
+		REX::WARN(
+			"Unknown Debug.DecodeKey '{}'; using F10.",
+			configuredDecodeKey
+		);
+	}
+
+	const auto configuredDumpKey =
+		f4ffmpeg::config::debugFrameDumpKey.GetValue();
+
+	if (const auto key = parseDebugKey(configuredDumpKey))
+	{
+		debugFrameDumpKey = *key;
+	}
+	else
+	{
+		REX::WARN(
+			"Unknown Debug.FrameDumpKey '{}'; using F11.",
+			configuredDumpKey
+		);
+	}
+
+	void dumpDebugFrame()
+	{
+		if (!testManager)
+		{
+			REX::WARN("No active debug manager.");
+			return;
+		}
+
+		auto frame = testManager->getLatestFrame();
+
+		if (!frame)
+		{
+			REX::WARN("No produced frame available to dump.");
+			return;
+		}
+
+		if (!f4ffmpeg::decoder::frameDump(
+				*frame,
+				"Data/F4SE/Plugins/f4ffmpeg_framedump.tga"))
+		{
+			REX::ERROR("Failed to dump debug frame.");
+		}
+	}
 
 	void onF4SEMessage(F4SE::MessagingInterface::Message* message);
 	void initF4ffmpeg();
