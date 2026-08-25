@@ -393,7 +393,7 @@ void OnButtonEvent(
         return;
     }
 }
-
+};
 
 
 	std::optional<RE::BS_BUTTON_CODE>
