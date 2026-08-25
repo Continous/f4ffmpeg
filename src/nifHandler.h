@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 
 namespace f4ffmpeg
@@ -41,11 +42,15 @@ namespace f4ffmpeg
         friend std::shared_ptr<const videoTarget>
         getVideoTargetForTexture(const char* texturePath);
 
+        friend bool dispatchVideoManagers();
+
         videoTargetMode mode =
             videoTargetMode::vanillaOverride;
 
         std::string texturePath;
         std::string videoPath;
+
+        mutable std::shared_mutex playbackMutex;
         std::shared_ptr<manager> playback;
     };
 
@@ -56,16 +61,23 @@ namespace f4ffmpeg
         const char* texturePath
     );
 
-    // Returns the already-dispatched target associated with a texture.
-    // Managers are created while Data\\Video is indexed, not from a NIF hook.
+    // Returns the target associated with a texture. The target may exist before
+    // its manager is dispatched; until then getLatestFrame() returns nullptr and
+    // Fallout's vanilla presentation remains active.
     std::shared_ptr<const videoTarget>
     getVideoTargetForTexture(
         const char* texturePath
     );
 
     // Requires Fallout graphics to already be initialized. Scans loose .mov
-    // files beneath Data\\Video, dispatches one looping manager per physical
-    // video, builds both vanilla and *_video.dds mappings, and installs the
-    // BSShaderTextureSet discovery hooks plus D3D11 presentation hook.
+    // files beneath Data\Video, builds both vanilla and *_video.dds mappings,
+    // and installs the BSShaderTextureSet discovery hooks plus D3D11 presentation
+    // hook. No decoder/producer managers are started here.
     bool initializeNifHandler();
+
+    // Starts one looping manager per indexed physical video. Intended to be
+    // called only after a successful game load (F4SE kPostLoadGame). Safe to
+    // call more than once; already-running videos are reused and failed starts
+    // may be retried by a later call.
+    bool dispatchVideoManagers();
 }

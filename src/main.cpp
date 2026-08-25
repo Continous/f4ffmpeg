@@ -138,6 +138,46 @@ namespace Main
 				break;
 			}
 
+			case F4SE::MessagingInterface::kPostLoadGame:
+			{
+				// F4SE encodes the PostLoadGame success boolean in Message::data.
+				// A null value means LoadGame() failed and playback must remain deferred.
+				if (message->data == nullptr)
+				{
+					REX::WARN(
+						"F4SE reports game load failed; "
+						"f4ffmpeg manager dispatch remains deferred."
+					);
+
+					break;
+				}
+
+				if (!isF4ffmpegGraphics)
+				{
+					REX::WARN(
+						"F4SE reports game load complete before f4ffmpeg "
+						"graphics initialization; manager dispatch remains deferred."
+					);
+
+					break;
+				}
+
+				REX::INFO(
+					"F4SE reports successful game load; "
+					"dispatching indexed f4ffmpeg managers..."
+				);
+
+				if (!f4ffmpeg::dispatchVideoManagers())
+				{
+					REX::WARN(
+						"One or more f4ffmpeg managers failed to dispatch "
+						"after game load; vanilla textures remain available."
+					);
+				}
+
+				break;
+			}
+
 			default:
 				break;
 		}

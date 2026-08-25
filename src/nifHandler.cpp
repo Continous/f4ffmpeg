@@ -202,7 +202,6 @@ namespace f4ffmpeg
                 videoTargetMode::vanillaOverride;
 
             std::string videoPath;
-            std::shared_ptr<manager> playback;
         };
 
         struct resolvedVideoTarget
@@ -212,7 +211,6 @@ namespace f4ffmpeg
 
             std::string texturePath;
             std::string videoPath;
-            std::shared_ptr<manager> playback;
         };
 
         // Published once before hooks are installed, then read-only.
@@ -220,6 +218,15 @@ namespace f4ffmpeg
             std::string,
             indexedVideoReplacement>
             replacementIndex;
+
+        std::mutex playbackRegistryMutex;
+
+        std::unordered_map<
+            std::string,
+            std::shared_ptr<manager>>
+            playbackByVideo;
+
+        std::mutex dispatchMutex;
 
         void registerIndexedReplacement(
             std::string textureKey,
@@ -482,28 +489,6 @@ namespace f4ffmpeg
                 const std::string physicalVideoPath =
                     videoPath.string();
 
-                auto playback =
-                    createManager(
-                        physicalVideoPath.c_str(),
-                        true
-                    );
-
-                if (!playback)
-                {
-                    REX::WARN(
-                        "f4ffmpeg found loose replacement '{}' but could not "
-                        "dispatch its manager; no texture mappings were published.",
-                        physicalVideoPath
-                    );
-
-                    continue;
-                }
-
-                REX::INFO(
-                    "f4ffmpeg dispatched manager for loose replacement '{}'.",
-                    physicalVideoPath
-                );
-
                 std::string textureStem{
                     texturesPrefix
                 };
@@ -527,8 +512,7 @@ namespace f4ffmpeg
                     std::move(vanillaTexture),
                     indexedVideoReplacement{
                         videoTargetMode::vanillaOverride,
-                        physicalVideoPath,
-                        playback
+                        physicalVideoPath
                     }
                 );
 
@@ -536,8 +520,7 @@ namespace f4ffmpeg
                     std::move(directTexture),
                     indexedVideoReplacement{
                         videoTargetMode::directTextureSwap,
-                        physicalVideoPath,
-                        std::move(playback)
+                        physicalVideoPath
                     }
                 );
 
@@ -545,8 +528,8 @@ namespace f4ffmpeg
             }
 
             REX::INFO(
-                "f4ffmpeg indexed {} active loose video replacement(s) into {} "
-                "texture mapping(s).",
+                "f4ffmpeg indexed {} loose video replacement(s) into {} "
+                "texture mapping(s); manager dispatch is deferred until game load.",
                 activeVideos,
                 replacementIndex.size()
             );
@@ -593,8 +576,7 @@ namespace f4ffmpeg
             return resolvedVideoTarget{
                 replacement->second.mode,
                 std::move(normalized),
-                replacement->second.videoPath,
-                replacement->second.playback
+                replacement->second.videoPath
             };
         }
 
@@ -1519,10 +1501,21 @@ namespace f4ffmpeg
     std::shared_ptr<const producedFrame>
     videoTarget::getLatestFrame() const
     {
-        if (!playback)
+        std::shared_ptr<manager> currentPlayback;
+
+        {
+            std::shared_lock lock(
+                playbackMutex
+            );
+
+            currentPlayback =
+                playback;
+        }
+
+        if (!currentPlayback)
             return nullptr;
 
-        return playback->getLatestFrame();
+        return currentPlayback->getLatestFrame();
     }
 
     std::optional<std::string>
@@ -1570,11 +1563,10 @@ namespace f4ffmpeg
             return existing->second;
         }
 
-        // Playback was already dispatched by buildReplacementIndex(). This
-        // function never creates or starts a manager.
-        if (!resolved->playback)
-            return nullptr;
-
+        // Targets may be discovered before post-load manager dispatch. Keep
+        // the binding alive with a null playback pointer; dispatchVideoManagers()
+        // attaches the manager later without requiring Bethesda to reacquire the
+        // texture.
         auto target =
             std::make_shared<videoTarget>();
 
@@ -1587,8 +1579,26 @@ namespace f4ffmpeg
         target->videoPath =
             resolved->videoPath;
 
-        target->playback =
-            resolved->playback;
+        {
+            const std::string videoKey =
+                lowercasePath(
+                    resolved->videoPath
+                );
+
+            std::scoped_lock playbackLock(
+                playbackRegistryMutex
+            );
+
+            if (const auto playback =
+                    playbackByVideo.find(
+                        videoKey
+                    );
+                playback != playbackByVideo.end())
+            {
+                target->playback =
+                    playback->second;
+            }
+        }
 
         targetsByTexture.emplace(
             textureKey,
@@ -1596,6 +1606,158 @@ namespace f4ffmpeg
         );
 
         return target;
+    }
+
+    bool dispatchVideoManagers()
+    {
+        std::scoped_lock dispatchLock(
+            dispatchMutex
+        );
+
+        std::unordered_set<std::string>
+            videoKeys;
+
+        std::vector<std::string>
+            videoPaths;
+
+        videoKeys.reserve(
+            replacementIndex.size()
+        );
+
+        for (const auto& [textureKey, replacement] :
+             replacementIndex)
+        {
+            (void)textureKey;
+
+            const std::string videoKey =
+                lowercasePath(
+                    replacement.videoPath
+                );
+
+            if (videoKeys.emplace(videoKey).second)
+            {
+                videoPaths.emplace_back(
+                    replacement.videoPath
+                );
+            }
+        }
+
+        if (videoPaths.empty())
+        {
+            REX::INFO(
+                "f4ffmpeg post-load manager dispatch found no indexed videos."
+            );
+
+            return true;
+        }
+
+        std::size_t runningVideos = 0;
+        std::size_t newlyDispatched = 0;
+
+        for (const auto& videoPath : videoPaths)
+        {
+            const std::string videoKey =
+                lowercasePath(
+                    videoPath
+                );
+
+            std::shared_ptr<manager> playback;
+
+            {
+                std::scoped_lock playbackLock(
+                    playbackRegistryMutex
+                );
+
+                if (const auto existing =
+                        playbackByVideo.find(
+                            videoKey
+                        );
+                    existing != playbackByVideo.end())
+                {
+                    playback =
+                        existing->second;
+                }
+            }
+
+            if (!playback)
+            {
+                playback =
+                    createManager(
+                        videoPath.c_str(),
+                        true
+                    );
+
+                if (!playback)
+                {
+                    REX::WARN(
+                        "f4ffmpeg post-load dispatch could not start manager for '{}'.",
+                        videoPath
+                    );
+
+                    continue;
+                }
+
+                {
+                    std::scoped_lock playbackLock(
+                        playbackRegistryMutex
+                    );
+
+                    playbackByVideo.emplace(
+                        videoKey,
+                        playback
+                    );
+                }
+
+                ++newlyDispatched;
+
+                REX::INFO(
+                    "f4ffmpeg post-load dispatched manager for loose replacement '{}'.",
+                    videoPath
+                );
+            }
+
+            ++runningVideos;
+
+            // A target may already be registered against Fallout's vanilla SRV
+            // from loading activity that occurred before this post-load event.
+            // Attach playback now so that existing presentation bindings become
+            // live without requiring the texture to be requested again.
+            std::scoped_lock targetLock(
+                targetRegistryMutex
+            );
+
+            for (auto& [textureKey, target] :
+                 targetsByTexture)
+            {
+                (void)textureKey;
+
+                if (
+                    !target ||
+                    lowercasePath(
+                        target->videoPath
+                    ) != videoKey)
+                {
+                    continue;
+                }
+
+                std::unique_lock playbackLock(
+                    target->playbackMutex
+                );
+
+                target->playback =
+                    playback;
+            }
+        }
+
+        REX::INFO(
+            "f4ffmpeg post-load manager dispatch complete: {} running, {} newly dispatched, {} indexed video(s).",
+            runningVideos,
+            newlyDispatched,
+            videoPaths.size()
+        );
+
+        return runningVideos ==
+            videoPaths.size();
     }
 
     bool initializeNifHandler()
@@ -1632,7 +1794,7 @@ namespace f4ffmpeg
                 {
                     REX::WARN(
                         "f4ffmpeg replacement index encountered filesystem "
-                        "errors; successfully dispatched entries remain usable."
+                        "errors; successfully indexed entries remain usable."
                     );
                 }
 
