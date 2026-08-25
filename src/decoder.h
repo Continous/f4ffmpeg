@@ -17,7 +17,7 @@ namespace f4ffmpeg
 {
     void initializeFFmpegLogging();
 
-    std::size_t frameDump(
+    void frameDump(
     const char* outputPath
     );
 

@@ -18,8 +18,6 @@ namespace f4ffmpeg
         std::vector<hardwareCodec> codecs;
     };
 
-    bool testDecode();
-
     struct reportedCodec
     {
         std::string backend;

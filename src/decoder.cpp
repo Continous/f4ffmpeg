@@ -821,7 +821,6 @@ decodeResult decoder::decodeNextFrame(
             frameDumpGeneration.load(
                 std::memory_order_acquire
             );
-
         if (
             dumpGeneration !=
                 handledFrameDumpGeneration)
@@ -829,7 +828,25 @@ decodeResult decoder::decodeNextFrame(
             handledFrameDumpGeneration =
                 dumpGeneration;
 
-            // Dump this frame.
+            std::string outputPath;
+
+            {
+                std::scoped_lock lock(
+                    frameDumpPathMutex
+                );
+
+                outputPath =
+                    frameDumpPath;
+            }
+
+            if (!dumpDecodedFrame(
+                    *outputFrame,
+                    outputPath.c_str()))
+            {
+                REX::ERROR(
+                    "Failed to dump decoded frame."
+                );
+            }
         }
 
             return {
