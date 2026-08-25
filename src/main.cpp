@@ -38,10 +38,7 @@ namespace Main
     static bool isInit = false;
 	static bool isGameReady = false;
 	static bool isF4ffmpegGraphics = false;
-	static bool frameDump(
-	const producedFrame& frame,
-	const char* outputPath
-	);
+	void dumpDebugFrame();
 
 
 	static std::shared_ptr<f4ffmpeg::manager>
