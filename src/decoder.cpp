@@ -6,7 +6,6 @@
 #include "graphics.h"
 #include <cmath>
 #include <filesystem>
-#include <unordered_map>
 
 extern "C"
 {
@@ -22,6 +21,14 @@ namespace f4ffmpeg
 {
 
 namespace {
+
+    bool writeTga(
+        const char* path,
+        const std::uint8_t* data,
+        int width,
+        int height,
+        int stride
+    );
 
 bool dumpDecodedFrame(
         const AVFrame& frame,
@@ -588,13 +595,6 @@ namespace
 
 void decoder::clearProducedFrames()
 {
-    {
-        std::scoped_lock lock(
-            frameDumpRegistryMutex
-        );
-
-        latestProducedFrames.erase(this);
-    }
 
     {
         std::scoped_lock lock(
@@ -764,133 +764,6 @@ bool decoder::frameProduceD3D11(
     // canonical output.texture.
 
     return false;
-}
-
-namespace // Yeet frame into a tga
-{
-    bool dumpProducedFrame(
-        const producedFrame& frame,
-        const char* outputPath)
-    {
-    if (
-        frame.texture == nullptr ||
-        outputPath == nullptr)
-    {
-        return false;
-    }
-
-    REX::INFO("Writing frame dump to {}", outputPath);
-
-    auto* device =
-        getD3D11Device();
-
-    auto* context =
-        getD3D11DeviceContext();
-
-    if (
-        device == nullptr ||
-        context == nullptr)
-    {
-        return false;
-    }
-
-    REX::W32::D3D11_TEXTURE2D_DESC desc{};
-    frame.texture->GetDesc(&desc);
-
-    REX::W32::D3D11_TEXTURE2D_DESC stagingDesc =
-        desc;
-
-    stagingDesc.usage =
-        REX::W32::D3D11_USAGE_STAGING;
-
-    stagingDesc.bindFlags = 0;
-    stagingDesc.cpuAccessFlags =
-        REX::W32::D3D11_CPU_ACCESS_READ;
-    stagingDesc.miscFlags = 0;
-
-    REX::W32::ID3D11Texture2D* stagingTexture =
-        nullptr;
-
-    const auto createResult =
-        device->CreateTexture2D(
-            &stagingDesc,
-            nullptr,
-            &stagingTexture
-        );
-
-    if (
-        createResult < 0 ||
-        stagingTexture == nullptr)
-    {
-        return false;
-    }
-
-    context->CopyResource(
-        stagingTexture,
-        frame.texture
-    );
-
-    REX::W32::D3D11_MAPPED_SUBRESOURCE mapped{};
-
-    const auto mapResult =
-        context->Map(
-            stagingTexture,
-            0,
-            REX::W32::D3D11_MAP_READ,
-            0,
-            &mapped
-        );
-
-    if (mapResult < 0)
-    {
-        stagingTexture->Release();
-        return false;
-    }
-    const int stride =
-        static_cast<int>(frame.width * 4);
-
-    std::vector<std::uint8_t> pixels(
-        static_cast<std::size_t>(stride) *
-        frame.height
-    );
-
-    for (std::uint32_t y = 0; y < frame.height; ++y)
-    {
-        const auto* source =
-            static_cast<const std::uint8_t*>(mapped.data) +
-            static_cast<std::size_t>(y) * mapped.rowPitch;
-
-        auto* destination =
-            pixels.data() +
-            static_cast<std::size_t>(y) * stride;
-
-        for (std::uint32_t x = 0; x < frame.width; ++x)
-        {
-            destination[0] = source[2]; // B
-            destination[1] = source[1]; // G
-            destination[2] = source[0]; // R
-            destination[3] = source[3]; // A
-
-            source += 4;
-            destination += 4;
-        }
-    }
-
-    context->Unmap(
-        stagingTexture,
-        0
-    );
-
-    stagingTexture->Release();
-
-    return writeTga(
-        outputPath,
-        pixels.data(),
-        static_cast<int>(frame.width),
-        static_cast<int>(frame.height),
-        stride
-    );
-    }
 }
 
 void frameDump(
