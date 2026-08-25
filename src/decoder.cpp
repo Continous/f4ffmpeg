@@ -11,6 +11,7 @@
 extern "C"
 {
 #include <libavcodec/avcodec.h>
+#include <libswscale/swscale.h>
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/pixdesc.h>
@@ -22,12 +23,179 @@ namespace f4ffmpeg
 
 namespace {
 
-    std::mutex frameDumpRegistryMutex;
+bool dumpDecodedFrame(
+        const AVFrame& frame,
+        const char* outputPath)
+    {
+        if (
+            outputPath == nullptr ||
+            frame.width <= 0 ||
+            frame.height <= 0)
+        {
+            return false;
+        }
 
-    std::unordered_map<
-        const decoder*,
-        std::weak_ptr<producedFrame>
-    > latestProducedFrames;
+        const AVFrame* source = &frame;
+
+        AVFrame* transferred = nullptr;
+
+        const auto frameFormat =
+            static_cast<AVPixelFormat>(
+                frame.format
+            );
+
+        const auto* descriptor =
+            av_pix_fmt_desc_get(
+                frameFormat
+            );
+
+        const bool hardwareFrame =
+            descriptor != nullptr &&
+            (
+                descriptor->flags &
+                AV_PIX_FMT_FLAG_HWACCEL
+            );
+
+        if (hardwareFrame)
+        {
+            transferred =
+                av_frame_alloc();
+
+            if (transferred == nullptr)
+            {
+                return false;
+            }
+
+            const int transferResult =
+                av_hwframe_transfer_data(
+                    transferred,
+                    &frame,
+                    0
+                );
+
+            if (transferResult < 0)
+            {
+                REX::ERROR(
+                    "Failed to transfer hardware frame "
+                    "for dump: {}.",
+                    transferResult
+                );
+
+                av_frame_free(
+                    &transferred
+                );
+
+                return false;
+            }
+
+            source = transferred;
+        }
+
+        const int width =
+            source->width;
+
+        const int height =
+            source->height;
+
+        const auto sourceFormat =
+            static_cast<AVPixelFormat>(
+                source->format
+            );
+
+        SwsContext* sws =
+            sws_getContext(
+                width,
+                height,
+                sourceFormat,
+                width,
+                height,
+                AV_PIX_FMT_BGRA,
+                SWS_BILINEAR,
+                nullptr,
+                nullptr,
+                nullptr
+            );
+
+        if (sws == nullptr)
+        {
+            av_frame_free(
+                &transferred
+            );
+
+            REX::ERROR(
+                "Failed to create swscale context "
+                "for decoded frame dump."
+            );
+
+            return false;
+        }
+
+        const int stride =
+            width * 4;
+
+        std::vector<std::uint8_t> pixels(
+            static_cast<std::size_t>(stride) *
+            static_cast<std::size_t>(height)
+        );
+
+        std::uint8_t* destinationData[4]{
+            pixels.data(),
+            nullptr,
+            nullptr,
+            nullptr
+        };
+
+        int destinationStride[4]{
+            stride,
+            0,
+            0,
+            0
+        };
+
+        const int convertedHeight =
+            sws_scale(
+                sws,
+                source->data,
+                source->linesize,
+                0,
+                height,
+                destinationData,
+                destinationStride
+            );
+
+        sws_freeContext(
+            sws
+        );
+
+        av_frame_free(
+            &transferred
+        );
+
+        if (convertedHeight != height)
+        {
+            REX::ERROR(
+                "Decoded frame conversion failed: "
+                "{}/{} rows converted.",
+                convertedHeight,
+                height
+            );
+
+            return false;
+        }
+
+        REX::INFO(
+            "Writing decoded frame dump to {}",
+            outputPath
+        );
+
+        return writeTga(
+            outputPath,
+            pixels.data(),
+            width,
+            height,
+            stride
+        );
+    }
 
     AVPixelFormat getHardwareFormat(
         AVCodecContext* codecContext,
@@ -1211,6 +1379,10 @@ bool decoder::initializeVideoDecoder()
             return false;
         }
 
+        handledFrameDumpGeneration =
+            frameDumpGeneration.load(
+                std::memory_order_acquire
+            );
 
         return true;
     }
