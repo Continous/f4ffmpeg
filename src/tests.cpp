@@ -92,10 +92,9 @@ bool testDecode()
 
             const bool dumped =
                 produced &&
-                producer.frameDump(
-                    *produced,
+                frameDump(
                     "Data/Video/f4ffmpeg/testDecode.tga"
-                );
+                ) > 0;
 
             if (dumped)
             {
