@@ -6,6 +6,7 @@
 #include "graphics.h"
 #include <cmath>
 #include <filesystem>
+#include <REX/W32/DXGI_2.h>
 
 extern "C"
 {
