@@ -20,6 +20,7 @@ extern "C"
 #include "manager.h"
 #include "producerWorker.h"
 #include "playbackClockSource.h"
+#include "nifHandler.h"
 #include <algorithm>
 #include <array>
 #include <optional>
