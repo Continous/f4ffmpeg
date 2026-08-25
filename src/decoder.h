@@ -146,7 +146,8 @@ namespace f4ffmpeg
         bool decoderDraining = false;
         bool decoderEOF = false;
         double currentTimestamp = -1.0;
-        std::uint64_t handledFrameDumpGeneration = 0;
+        std::uint64_t handledDecodedFrameDumpGeneration = 0;
+        std::uint64_t handledProducedFrameDumpGeneration = 0;
 
 
     };

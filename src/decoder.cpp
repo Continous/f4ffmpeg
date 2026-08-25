@@ -1471,6 +1471,8 @@ bool decoder::initializeVideoDecoder()
         }
     }
 
+    struct producedFrameVulkanState;
+
     void initializeFFmpegLogging()
     {
         av_log_set_level(
