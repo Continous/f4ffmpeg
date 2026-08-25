@@ -16,20 +16,13 @@ extern "C"
 namespace f4ffmpeg
 {
 
-    struct producedFrameVulkanState
-    {
-        // Vulkan alias of Fallout's D3D11 texture.
-        VkImage image = VK_NULL_HANDLE;
-        VkDeviceMemory memory = VK_NULL_HANDLE;
-        VkImageView view = VK_NULL_HANDLE;
+    struct producedFrameVulkanState;
 
-        // Vulkan-local conversion target.
-        VkImage rgbaImage = VK_NULL_HANDLE;
-        VkDeviceMemory rgbaMemory = VK_NULL_HANDLE;
-        VkImageView rgbaView = VK_NULL_HANDLE;
+    void initializeFFmpegLogging();
 
-        ...
-    };
+    void frameDump(
+    const char* outputPath
+    );
 
     void initializeFFmpegLogging();
 
