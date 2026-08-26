@@ -6,7 +6,6 @@
 
 #include "decoder.h"
 
-
 namespace f4ffmpeg
 {
     class decodeWorker
@@ -21,6 +20,16 @@ namespace f4ffmpeg
         ~decodeWorker();
 
         bool start(const char* path);
+
+        // Rewind the already-open decoder in place. Unlike start(), this does
+        // not reopen the input, recreate the codec context, or rebuild the
+        // hardware decode device. Intended for seamless looping.
+        bool rewind();
+
+        // Switch to a different input without touching manager's producer.
+        // decoder::open() preserves the AVHWDeviceContext when possible.
+        bool switchSource(const char* path);
+
         void stop();
 
         std::shared_ptr<const decodedFrame>
