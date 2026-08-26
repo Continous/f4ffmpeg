@@ -19,10 +19,12 @@
 #include <vector>
 
 #include <RE/B/BSGraphics.h>
+#include <RE/B/BSShaderProperty.h>
 #include <RE/B/BSShaderTextureSet.h>
 #include <RE/B/BSTextureSet.h>
 #include <RE/N/NiPointer.h>
 #include <RE/N/NiTexture.h>
+#include <RE/IDs_VTABLE.h>
 #include <REL/Relocation.h>
 #include <REX/W32/D3D11.h>
 #include <REX/W32/KERNEL32.h>
@@ -160,6 +162,24 @@ namespace f4ffmpeg
                 normalized.erase(
                     0,
                     dataPrefix.size()
+                );
+            }
+
+            // Bethesda texture APIs are inconsistent about retaining the
+            // leading "Textures\\" resource root. Our replacement index is
+            // canonicalized with it, so accept ordinary resource-relative DDS
+            // names as equivalent.
+            if (
+                !startsWithInsensitive(
+                    normalized,
+                    texturesPrefix) &&
+                endsWithInsensitive(
+                    normalized,
+                    ddsSuffix))
+            {
+                normalized.insert(
+                    0,
+                    texturesPrefix
                 );
             }
 
@@ -619,9 +639,23 @@ namespace f4ffmpeg
         REL::Relocation<getTexture_t>
             originalGetTexture;
 
+        // CommonLibF4 currently exposes the generated BSEffectShaderProperty
+        // vtable ID but not a concrete class wrapper. The class still derives
+        // from BSShaderProperty, whose virtual slot 0x39 is GetBaseTexture().
+        // Use the base signature and avoid depending on an inferred effect
+        // material layout.
+        using effectGetBaseTexture_t =
+            RE::NiTexture*(*)(
+                RE::BSShaderProperty*
+            );
+
+        REL::Relocation<effectGetBaseTexture_t>
+            originalEffectGetBaseTexture;
+
         std::atomic_bool filenameHookObserved = false;
         std::atomic_bool prefetchedHookObserved = false;
         std::atomic_bool ordinaryHookObserved = false;
+        std::atomic_bool effectBaseHookObserved = false;
 
         std::mutex diagnosticTextureMutex;
         std::unordered_set<std::string>
@@ -698,6 +732,75 @@ namespace f4ffmpeg
                     "f4ffmpeg {} observed TV-related base texture '{}' "
                     "with no indexed replacement.",
                     hookName,
+                    normalized
+                );
+            }
+        }
+
+        void diagnoseEffectTexturePath(
+            const char* texturePath)
+        {
+            if (
+                texturePath == nullptr ||
+                *texturePath == '\0')
+            {
+                return;
+            }
+
+            const std::string normalized =
+                normalizeTexturePath(
+                    texturePath
+                );
+
+            const std::string key =
+                lowercasePath(
+                    normalized
+                );
+
+            const bool indexed =
+                replacementIndex.find(key) !=
+                    replacementIndex.end();
+
+            const bool tvRelated =
+                key.find("tvanim") != std::string::npos ||
+                key.find("standby") != std::string::npos ||
+                key.find("television") != std::string::npos;
+
+            if (!indexed && !tvRelated)
+                return;
+
+            std::string diagnosticKey{
+                "BSEffectShaderProperty::GetBaseTexture|"
+            };
+
+            diagnosticKey += key;
+
+            {
+                std::scoped_lock lock(
+                    diagnosticTextureMutex
+                );
+
+                if (!diagnosticTexturePaths.emplace(
+                        std::move(diagnosticKey)
+                    ).second)
+                {
+                    return;
+                }
+            }
+
+            if (indexed)
+            {
+                REX::INFO(
+                    "f4ffmpeg BSEffectShaderProperty observed indexed base "
+                    "texture '{}'.",
+                    normalized
+                );
+            }
+            else
+            {
+                REX::INFO(
+                    "f4ffmpeg BSEffectShaderProperty observed TV-related base "
+                    "texture '{}' with no indexed replacement.",
                     normalized
                 );
             }
@@ -820,23 +923,9 @@ namespace f4ffmpeg
         }
 
         void registerPresentationBinding(
-            RE::BSShaderTextureSet* textureSet,
-            textureType type,
-            RE::NiPointer<RE::NiTexture>* texture)
+            const char* texturePath,
+            RE::NiTexture* niTexture)
         {
-            if (
-                textureSet == nullptr ||
-                type != textureType::kBase)
-            {
-                return;
-            }
-
-            const char* texturePath =
-                originalGetTextureFilename(
-                    textureSet,
-                    type
-                );
-
             const auto target =
                 getVideoTargetForTexture(
                     texturePath
@@ -845,26 +934,11 @@ namespace f4ffmpeg
             if (!target)
                 return;
 
-            if (
-                texture == nullptr ||
-                !*texture)
-            {
-                logBindingFailureOnce(
-                    texturePath,
-                    "Bethesda returned no NiTexture yet"
-                );
-
-                return;
-            }
-
-            auto* niTexture =
-                texture->get();
-
             if (niTexture == nullptr)
             {
                 logBindingFailureOnce(
                     texturePath,
-                    "NiTexture pointer is null"
+                    "Bethesda returned no NiTexture yet"
                 );
 
                 return;
@@ -971,6 +1045,78 @@ namespace f4ffmpeg
             );
         }
 
+        void registerTextureSetPresentationBinding(
+            RE::BSShaderTextureSet* textureSet,
+            textureType type,
+            RE::NiPointer<RE::NiTexture>* texture)
+        {
+            if (
+                textureSet == nullptr ||
+                type != textureType::kBase)
+            {
+                return;
+            }
+
+            const char* texturePath =
+                originalGetTextureFilename(
+                    textureSet,
+                    type
+                );
+
+            registerPresentationBinding(
+                texturePath,
+                texture != nullptr && *texture
+                    ? texture->get()
+                    : nullptr
+            );
+        }
+
+        RE::NiTexture* effectGetBaseTextureHook(
+            RE::BSShaderProperty* property)
+        {
+            auto* texture =
+                originalEffectGetBaseTexture(
+                    property
+                );
+
+            if (!effectBaseHookObserved.exchange(
+                    true,
+                    std::memory_order_acq_rel
+                ))
+            {
+                REX::INFO(
+                    "f4ffmpeg BSEffectShaderProperty::GetBaseTexture "
+                    "hook reached."
+                );
+            }
+
+            if (texture == nullptr)
+                return texture;
+
+            const auto textureName =
+                texture->GetName();
+
+            if (textureName.empty())
+                return texture;
+
+            // BSFixedString-backed names are stable for the lifetime of the
+            // NiTexture, but getVideoTargetForTexture() accepts a C string.
+            const std::string texturePath{
+                textureName
+            };
+
+            diagnoseEffectTexturePath(
+                texturePath.c_str()
+            );
+
+            registerPresentationBinding(
+                texturePath.c_str(),
+                texture
+            );
+
+            return texture;
+        }
+
         void getTexturePrefetchedHook(
             RE::BSShaderTextureSet* textureSet,
             const void* prefetchedHandle,
@@ -1009,7 +1155,7 @@ namespace f4ffmpeg
                 )
             );
 
-            registerPresentationBinding(
+            registerTextureSetPresentationBinding(
                 textureSet,
                 type,
                 texture
@@ -1050,7 +1196,7 @@ namespace f4ffmpeg
                 )
             );
 
-            registerPresentationBinding(
+            registerTextureSetPresentationBinding(
                 textureSet,
                 type,
                 texture
@@ -1388,6 +1534,74 @@ namespace f4ffmpeg
 
             REX::INFO(
                 "f4ffmpeg D3D11 texture presentation hook initialized."
+            );
+
+            return true;
+        }
+
+        bool installEffectTextureHook()
+        {
+            REL::Relocation<std::uintptr_t>
+                vtable{
+                    RE::VTABLE::BSEffectShaderProperty[0]
+                };
+
+            constexpr std::size_t getBaseTextureVtableIndex =
+                0x39;
+
+            const auto original =
+                *reinterpret_cast<const std::uintptr_t*>(
+                    vtable.address() +
+                    sizeof(void*) *
+                        getBaseTextureVtableIndex
+                );
+
+            if (original == 0)
+            {
+                REX::ERROR(
+                    "Failed to resolve f4ffmpeg BSEffectShaderProperty "
+                    "GetBaseTexture interception target."
+                );
+
+                return false;
+            }
+
+            originalEffectGetBaseTexture =
+                original;
+
+            REX::INFO(
+                "f4ffmpeg BSEffectShaderProperty vtable={}; "
+                "GetBaseTexture original={}.",
+                reinterpret_cast<void*>(
+                    vtable.address()
+                ),
+                reinterpret_cast<void*>(
+                    original
+                )
+            );
+
+            vtable.write_vfunc(
+                getBaseTextureVtableIndex,
+                effectGetBaseTextureHook
+            );
+
+            const auto patched =
+                *reinterpret_cast<const std::uintptr_t*>(
+                    vtable.address() +
+                    sizeof(void*) *
+                        getBaseTextureVtableIndex
+                );
+
+            REX::INFO(
+                "f4ffmpeg BSEffectShaderProperty GetBaseTexture patched={}.",
+                reinterpret_cast<void*>(
+                    patched
+                )
+            );
+
+            REX::INFO(
+                "f4ffmpeg BSEffectShaderProperty base-texture "
+                "interception initialized."
             );
 
             return true;
@@ -1802,6 +2016,9 @@ namespace f4ffmpeg
                     return;
 
                 if (!installTextureHooks())
+                    return;
+
+                if (!installEffectTextureHook())
                     return;
 
                 initialized = true;

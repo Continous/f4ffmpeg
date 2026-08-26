@@ -71,8 +71,10 @@ namespace f4ffmpeg
 
     // Requires Fallout graphics to already be initialized. Scans loose .mov
     // files beneath Data\Video, builds both vanilla and *_video.dds mappings,
-    // and installs the BSShaderTextureSet discovery hooks plus D3D11 presentation
-    // hook. No decoder/producer managers are started here.
+    // and installs both ordinary BSShaderTextureSet discovery and
+    // BSEffectShaderProperty base-texture discovery (used by vanilla effect /
+    // flipbook surfaces), plus the common D3D11 presentation hook. No
+    // decoder/producer managers are started here.
     bool initializeNifHandler();
 
     // Starts one looping manager per indexed physical video. Intended to be
