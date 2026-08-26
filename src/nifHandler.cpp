@@ -26,6 +26,7 @@
 #include <RE/N/NiPointer.h>
 #include <RE/N/NiTexture.h>
 #include <REL/Relocation.h>
+#include <REX/FModule.h>
 #include <REX/W32/D3D11.h>
 #include <REX/W32/KERNEL32.h>
 
