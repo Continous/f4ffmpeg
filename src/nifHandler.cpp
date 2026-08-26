@@ -51,15 +51,12 @@ namespace f4ffmpeg
         constexpr std::string_view workshopTvStaticTexture =
             "textures\\effects\\tvanim\\rasterscananim_d.dds";
 
-        // Keep .mov first for backward-compatible collision precedence.
-        // The decoder itself is FFmpeg-backed; nifHandler only needs to avoid
-        // treating unrelated Data\\Video sidecars/config files as video inputs.
         constexpr std::array<std::string_view, 12>
             supportedVideoExtensions{
+                ".mkv",
                 ".mov",
                 ".mp4",
                 ".m4v",
-                ".mkv",
                 ".webm",
                 ".avi",
                 ".wmv",
@@ -157,9 +154,7 @@ namespace f4ffmpeg
                         extension,
                         supportedVideoExtensions[index]))
                 {
-                    // Earlier entries have higher precedence. This makes .mov
-                    // win stem collisions, preserving the behavior of releases
-                    // that only recognized .mov.
+                    // Earlier entries have higher precedence.
                     return static_cast<int>(
                         supportedVideoExtensions.size() - index
                     );
