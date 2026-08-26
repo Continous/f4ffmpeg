@@ -1,12 +1,14 @@
 #include "decoder.h"
+#include <atomic>
 #include <cstdint>
 #include <fstream>
+#include <mutex>
+#include <string>
 #include <vector>
 #include "pch.h"
 #include "graphics.h"
 #include <cmath>
 #include <filesystem>
-#include <REX/W32/DXGI_2.h>
 
 extern "C"
 {
@@ -15,7 +17,6 @@ extern "C"
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/pixdesc.h>
-#include <libavutil/hwcontext_vulkan.h>
 #include <libavutil/log.h>
 }
 
@@ -25,1488 +26,383 @@ extern "C"
 
 namespace f4ffmpeg
 {
-struct producedFrameVulkanState
-{
-    AVBufferRef* deviceRef = nullptr;
-
-    VkDevice device =
-        VK_NULL_HANDLE;
-
-    const VkAllocationCallbacks* allocator =
-        nullptr;
-
-    VkImage image =
-        VK_NULL_HANDLE;
-
-    VkDeviceMemory memory =
-        VK_NULL_HANDLE;
-
-    VkImageView view =
-        VK_NULL_HANDLE;
-
-    VkImage rgbaImage =
-        VK_NULL_HANDLE;
-
-    VkDeviceMemory rgbaMemory =
-        VK_NULL_HANDLE;
-
-    VkImageView rgbaView =
-        VK_NULL_HANDLE;
-
-    std::uint32_t rgbaWidth = 0;
-    std::uint32_t rgbaHeight = 0;
-
-    VkCommandPool commandPool =
-        VK_NULL_HANDLE;
-
-    VkCommandBuffer commandBuffer =
-        VK_NULL_HANDLE;
-
-    VkQueue queue =
-        VK_NULL_HANDLE;
-
-    std::uint32_t queueFamilyIndex =
-        static_cast<std::uint32_t>(-1);
-
-    HANDLE sharedHandle =
-        nullptr;
-
-    PFN_vkDestroyImage destroyImage =
-        nullptr;
-
-    PFN_vkDestroyImageView destroyImageView =
-        nullptr;
-
-    PFN_vkFreeMemory freeMemory =
-        nullptr;
-
-    PFN_vkDestroyCommandPool destroyCommandPool =
-        nullptr;
-
-    ~producedFrameVulkanState()
-    {
-        if (
-            commandPool != VK_NULL_HANDLE &&
-            destroyCommandPool != nullptr)
-        {
-            destroyCommandPool(
-                device,
-                commandPool,
-                allocator
-            );
-        }
-
-        if (
-            rgbaView != VK_NULL_HANDLE &&
-            destroyImageView != nullptr)
-        {
-            destroyImageView(
-                device,
-                rgbaView,
-                allocator
-            );
-        }
-
-        if (
-            rgbaImage != VK_NULL_HANDLE &&
-            destroyImage != nullptr)
-        {
-            destroyImage(
-                device,
-                rgbaImage,
-                allocator
-            );
-        }
-
-        if (
-            rgbaMemory != VK_NULL_HANDLE &&
-            freeMemory != nullptr)
-        {
-            freeMemory(
-                device,
-                rgbaMemory,
-                allocator
-            );
-        }
-
-        if (
-            view != VK_NULL_HANDLE &&
-            destroyImageView != nullptr)
-        {
-            destroyImageView(
-                device,
-                view,
-                allocator
-            );
-        }
-
-        if (
-            image != VK_NULL_HANDLE &&
-            destroyImage != nullptr)
-        {
-            destroyImage(
-                device,
-                image,
-                allocator
-            );
-        }
-
-        if (
-            memory != VK_NULL_HANDLE &&
-            freeMemory != nullptr)
-        {
-            freeMemory(
-                device,
-                memory,
-                allocator
-            );
-        }
-
-        if (sharedHandle != nullptr)
-        {
-            ::CloseHandle(
-                sharedHandle
-            );
-
-            sharedHandle = nullptr;
-        }
-
-        av_buffer_unref(
-            &deviceRef
-        );
-    }
-};
 
 
 namespace
 {
-    template <class T>
-    T loadVulkanInstanceProc(
-        const AVVulkanDeviceContext& context,
-        const char* name)
+    struct convertedRgbaFrame
+    {
+        std::vector<std::uint8_t> pixels;
+        int width = 0;
+        int height = 0;
+        int stride = 0;
+    };
+
+    bool convertFrameToRgba(
+        const AVFrame& frame,
+        convertedRgbaFrame& output)
     {
         if (
-            context.get_proc_addr == nullptr ||
-            context.inst == VK_NULL_HANDLE ||
-            name == nullptr)
-        {
-            return nullptr;
-        }
-
-        return reinterpret_cast<T>(
-            context.get_proc_addr(
-                context.inst,
-                name
-            )
-        );
-    }
-
-    template <class T>
-    T loadVulkanDeviceProc(
-        const AVVulkanDeviceContext& context,
-        const char* name)
-    {
-        if (
-            context.act_dev == VK_NULL_HANDLE ||
-            name == nullptr)
-        {
-            return nullptr;
-        }
-
-        const auto getDeviceProcAddr =
-            loadVulkanInstanceProc<PFN_vkGetDeviceProcAddr>(
-                context,
-                "vkGetDeviceProcAddr"
-            );
-
-        if (getDeviceProcAddr == nullptr)
-        {
-            return nullptr;
-        }
-
-        return reinterpret_cast<T>(
-            getDeviceProcAddr(
-                context.act_dev,
-                name
-            )
-        );
-    }
-
-    bool chooseMemoryType(
-        std::uint32_t compatibleTypes,
-        const VkPhysicalDeviceMemoryProperties& properties,
-        VkMemoryPropertyFlags preferredFlags,
-        std::uint32_t& memoryTypeIndex)
-    {
-        for (
-            std::uint32_t index = 0;
-            index < properties.memoryTypeCount;
-            ++index)
-        {
-            const std::uint32_t bit =
-                1u << index;
-
-            if (
-                (compatibleTypes & bit) != 0 &&
-                (properties.memoryTypes[index].propertyFlags & preferredFlags) ==
-                    preferredFlags)
-            {
-                memoryTypeIndex = index;
-                return true;
-            }
-        }
-
-        for (
-            std::uint32_t index = 0;
-            index < properties.memoryTypeCount;
-            ++index)
-        {
-            if (
-                compatibleTypes &
-                    (1u << index))
-            {
-                memoryTypeIndex = index;
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    bool chooseVulkanProducerQueueFamily(
-        const AVVulkanDeviceContext& context,
-        std::uint32_t& queueFamilyIndex)
-    {
-        for (int index = 0; index < context.nb_qf; ++index)
-        {
-            const auto& family =
-                context.qf[index];
-
-            if (
-                family.idx >= 0 &&
-                family.num > 0 &&
-                (family.flags & VK_QUEUE_COMPUTE_BIT) != 0)
-            {
-                queueFamilyIndex =
-                    static_cast<std::uint32_t>(
-                        family.idx
-                    );
-
-                return true;
-            }
-        }
-
-        for (int index = 0; index < context.nb_qf; ++index)
-        {
-            const auto& family =
-                context.qf[index];
-
-            if (
-                family.idx >= 0 &&
-                family.num > 0 &&
-                (family.flags & VK_QUEUE_TRANSFER_BIT) != 0)
-            {
-                queueFamilyIndex =
-                    static_cast<std::uint32_t>(
-                        family.idx
-                    );
-
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    bool ensureProducedFrameVulkanState(
-        producedFrame& output,
-        AVHWFramesContext& framesContext,
-        AVVulkanDeviceContext& vkDeviceContext)
-    {
-        if (output.vulkanState)
-        {
-            return true;
-        }
-
-        if (
-            output.texture == nullptr ||
-            output.width == 0 ||
-            output.height == 0 ||
-            framesContext.device_ref == nullptr ||
-            vkDeviceContext.act_dev == VK_NULL_HANDLE ||
-            vkDeviceContext.phys_dev == VK_NULL_HANDLE)
+            frame.width <= 0 ||
+            frame.height <= 0)
         {
             return false;
         }
 
-        auto state =
-            std::make_unique<producedFrameVulkanState>();
+        const AVFrame* source =
+            &frame;
 
-        state->device =
-            vkDeviceContext.act_dev;
-
-        state->allocator =
-            vkDeviceContext.alloc;
-
-        state->deviceRef =
-            av_buffer_ref(
-                framesContext.device_ref
-            );
-
-        if (state->deviceRef == nullptr)
-        {
-            return false;
-        }
-
-        const auto createImage =
-            loadVulkanDeviceProc<PFN_vkCreateImage>(
-                vkDeviceContext,
-                "vkCreateImage"
-            );
-
-        const auto getImageMemoryRequirements =
-            loadVulkanDeviceProc<PFN_vkGetImageMemoryRequirements>(
-                vkDeviceContext,
-                "vkGetImageMemoryRequirements"
-            );
-
-        const auto getMemoryWin32HandleProperties =
-            loadVulkanDeviceProc<PFN_vkGetMemoryWin32HandlePropertiesKHR>(
-                vkDeviceContext,
-                "vkGetMemoryWin32HandlePropertiesKHR"
-            );
-
-        const auto allocateMemory =
-            loadVulkanDeviceProc<PFN_vkAllocateMemory>(
-                vkDeviceContext,
-                "vkAllocateMemory"
-            );
-
-        const auto bindImageMemory =
-            loadVulkanDeviceProc<PFN_vkBindImageMemory>(
-                vkDeviceContext,
-                "vkBindImageMemory"
-            );
-
-        const auto createImageView =
-            loadVulkanDeviceProc<PFN_vkCreateImageView>(
-                vkDeviceContext,
-                "vkCreateImageView"
-            );
-
-        state->destroyImage =
-            loadVulkanDeviceProc<PFN_vkDestroyImage>(
-                vkDeviceContext,
-                "vkDestroyImage"
-            );
-
-        state->destroyImageView =
-            loadVulkanDeviceProc<PFN_vkDestroyImageView>(
-                vkDeviceContext,
-                "vkDestroyImageView"
-            );
-
-        state->freeMemory =
-            loadVulkanDeviceProc<PFN_vkFreeMemory>(
-                vkDeviceContext,
-                "vkFreeMemory"
-            );
-
-        state->destroyCommandPool =
-            loadVulkanDeviceProc<PFN_vkDestroyCommandPool>(
-                vkDeviceContext,
-                "vkDestroyCommandPool"
-            );
-
-        if (
-            createImage == nullptr ||
-            getImageMemoryRequirements == nullptr ||
-            getMemoryWin32HandleProperties == nullptr ||
-            allocateMemory == nullptr ||
-            bindImageMemory == nullptr ||
-            createImageView == nullptr ||
-            state->destroyImage == nullptr ||
-            state->destroyImageView == nullptr ||
-            state->freeMemory == nullptr ||
-            state->destroyCommandPool == nullptr)
-        {
-            REX::ERROR(
-                "Failed to load Vulkan external-memory functions."
-            );
-
-            return false;
-        }
-
-        REX::W32::IDXGIResource1* dxgiResource =
+        AVFrame* transferred =
             nullptr;
 
-        const auto queryResult =
-            output.texture->QueryInterface(
-                REX::W32::IID_IDXGIResource1,
-                reinterpret_cast<void**>(
-                    &dxgiResource
-                )
+        const auto frameFormat =
+            static_cast<AVPixelFormat>(
+                frame.format
             );
 
-        if (
-            queryResult < 0 ||
-            dxgiResource == nullptr)
+        const auto* descriptor =
+            av_pix_fmt_desc_get(
+                frameFormat
+            );
+
+        const bool hardwareFrame =
+            descriptor != nullptr &&
+            (
+                descriptor->flags &
+                AV_PIX_FMT_FLAG_HWACCEL
+            ) != 0;
+
+        if (hardwareFrame)
         {
-            REX::ERROR(
-                "Failed to query produced texture for IDXGIResource1: 0x{:08X}",
-                static_cast<std::uint32_t>(
-                    queryResult
-                )
-            );
-
-            return false;
-        }
-
-        constexpr std::uint32_t sharedAccess =
-            0x80000000u | // DXGI_SHARED_RESOURCE_READ
-            0x00000001u;  // DXGI_SHARED_RESOURCE_WRITE
-
-        const auto sharedHandleResult =
-            dxgiResource->CreateSharedHandle(
-                nullptr,
-                sharedAccess,
-                nullptr,
-                &state->sharedHandle
-            );
-
-        dxgiResource->Release();
-
-        if (
-            sharedHandleResult < 0 ||
-            state->sharedHandle == nullptr)
-        {
-            REX::ERROR(
-                "Failed to create produced texture NT handle: 0x{:08X}",
-                static_cast<std::uint32_t>(
-                    sharedHandleResult
-                )
-            );
-
-            return false;
-        }
-
-        VkExternalMemoryImageCreateInfo externalImageInfo{};
-        externalImageInfo.sType =
-            VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
-        externalImageInfo.handleTypes =
-            VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
-
-        VkImageCreateInfo imageInfo{};
-        imageInfo.sType =
-            VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        imageInfo.pNext =
-            &externalImageInfo;
-        imageInfo.imageType =
-            VK_IMAGE_TYPE_2D;
-        imageInfo.format =
-            VK_FORMAT_R8G8B8A8_UNORM;
-        imageInfo.extent = {
-            output.width,
-            output.height,
-            1
-        };
-        imageInfo.mipLevels = 1;
-        imageInfo.arrayLayers = 1;
-        imageInfo.samples =
-            VK_SAMPLE_COUNT_1_BIT;
-        imageInfo.tiling =
-            VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage =
-            VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-            VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-            VK_IMAGE_USAGE_SAMPLED_BIT |
-            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-        imageInfo.sharingMode =
-            VK_SHARING_MODE_EXCLUSIVE;
-        imageInfo.initialLayout =
-            VK_IMAGE_LAYOUT_UNDEFINED;
-
-        const VkResult createImageResult =
-            createImage(
-                state->device,
-                &imageInfo,
-                state->allocator,
-                &state->image
-            );
-
-        if (createImageResult != VK_SUCCESS)
-        {
-            REX::ERROR(
-                "Failed to create Vulkan alias image: {}",
-                static_cast<int>(createImageResult)
-            );
-
-            return false;
-        }
-
-        VkMemoryRequirements requirements{};
-        getImageMemoryRequirements(
-            state->device,
-            state->image,
-            &requirements
-        );
-
-        VkMemoryWin32HandlePropertiesKHR handleProperties{};
-        handleProperties.sType =
-            VK_STRUCTURE_TYPE_MEMORY_WIN32_HANDLE_PROPERTIES_KHR;
-
-        const VkResult handlePropertiesResult =
-            getMemoryWin32HandleProperties(
-                state->device,
-                VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT,
-                state->sharedHandle,
-                &handleProperties
-            );
-
-        if (handlePropertiesResult != VK_SUCCESS)
-        {
-            REX::ERROR(
-                "Failed to query Vulkan properties for D3D11 handle: {}",
-                static_cast<int>(handlePropertiesResult)
-            );
-
-            return false;
-        }
-
-        const std::uint32_t compatibleTypes =
-            requirements.memoryTypeBits &
-            handleProperties.memoryTypeBits;
-
-        VkPhysicalDeviceMemoryProperties memoryProperties{};
-
-        const auto getPhysicalDeviceMemoryProperties =
-            loadVulkanInstanceProc<PFN_vkGetPhysicalDeviceMemoryProperties>(
-                vkDeviceContext,
-                "vkGetPhysicalDeviceMemoryProperties"
-            );
-
-        if (getPhysicalDeviceMemoryProperties == nullptr)
-        {
-            REX::ERROR(
-                "Failed to load vkGetPhysicalDeviceMemoryProperties."
-            );
-
-            return false;
-        }
-
-        getPhysicalDeviceMemoryProperties(
-            vkDeviceContext.phys_dev,
-            &memoryProperties
-        );
-
-        std::uint32_t memoryTypeIndex = 0;
-
-        if (!chooseMemoryType(
-                compatibleTypes,
-                memoryProperties,
-                0,
-                memoryTypeIndex))
-        {
-            REX::ERROR(
-                "No compatible Vulkan memory type exists for the D3D11 texture import."
-            );
-
-            return false;
-        }
-
-        VkMemoryDedicatedAllocateInfo dedicatedInfo{};
-        dedicatedInfo.sType =
-            VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
-        dedicatedInfo.image =
-            state->image;
-
-        VkImportMemoryWin32HandleInfoKHR importInfo{};
-        importInfo.sType =
-            VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR;
-        importInfo.pNext =
-            &dedicatedInfo;
-        importInfo.handleType =
-            VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
-        importInfo.handle =
-            state->sharedHandle;
-
-        VkMemoryAllocateInfo allocationInfo{};
-        allocationInfo.sType =
-            VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocationInfo.pNext =
-            &importInfo;
-        allocationInfo.allocationSize =
-            requirements.size;
-        allocationInfo.memoryTypeIndex =
-            memoryTypeIndex;
-
-        const VkResult allocateResult =
-            allocateMemory(
-                state->device,
-                &allocationInfo,
-                state->allocator,
-                &state->memory
-            );
-
-        if (allocateResult != VK_SUCCESS)
-        {
-            REX::ERROR(
-                "Failed to import D3D11 texture memory into Vulkan: {}",
-                static_cast<int>(allocateResult)
-            );
-
-            return false;
-        }
-
-        const VkResult bindResult =
-            bindImageMemory(
-                state->device,
-                state->image,
-                state->memory,
-                0
-            );
-
-        if (bindResult != VK_SUCCESS)
-        {
-            REX::ERROR(
-                "Failed to bind imported D3D11 memory to Vulkan image: {}",
-                static_cast<int>(bindResult)
-            );
-
-            return false;
-        }
-
-        VkImageViewCreateInfo viewInfo{};
-        viewInfo.sType =
-            VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image =
-            state->image;
-        viewInfo.viewType =
-            VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format =
-            VK_FORMAT_R8G8B8A8_UNORM;
-        viewInfo.subresourceRange.aspectMask =
-            VK_IMAGE_ASPECT_COLOR_BIT;
-        viewInfo.subresourceRange.baseMipLevel = 0;
-        viewInfo.subresourceRange.levelCount = 1;
-        viewInfo.subresourceRange.baseArrayLayer = 0;
-        viewInfo.subresourceRange.layerCount = 1;
-
-        const VkResult viewResult =
-            createImageView(
-                state->device,
-                &viewInfo,
-                state->allocator,
-                &state->view
-            );
-
-        if (viewResult != VK_SUCCESS)
-        {
-            REX::ERROR(
-                "Failed to create Vulkan view for produced texture: {}",
-                static_cast<int>(viewResult)
-            );
-
-            return false;
-        }
-
-        REX::TRACE(
-            "Imported produced D3D11 texture into Vulkan: {}x{}, VkImage={}",
-            output.width,
-            output.height,
-            reinterpret_cast<void*>(
-                state->image
-            )
-        );
-
-        output.vulkanState =
-            std::move(state);
-
-        return true;
-    }
-
-    bool ensureVulkanRgbaSurface(
-        producedFrameVulkanState& state,
-        AVHWFramesContext& framesContext,
-        AVVulkanFramesContext& vkFramesContext,
-        AVVulkanDeviceContext& vkDeviceContext,
-        int width,
-        int height)
-    {
-        (void)framesContext;
-        (void)vkFramesContext;
-
-        if (
-            width <= 0 ||
-            height <= 0 ||
-            state.device == VK_NULL_HANDLE ||
-            state.device != vkDeviceContext.act_dev)
-        {
-            return false;
-        }
-
-        if (
-            state.rgbaImage != VK_NULL_HANDLE &&
-            state.rgbaWidth ==
-                static_cast<std::uint32_t>(width) &&
-            state.rgbaHeight ==
-                static_cast<std::uint32_t>(height))
-        {
-            return true;
-        }
-
-        if (
-            state.rgbaImage != VK_NULL_HANDLE ||
-            state.rgbaMemory != VK_NULL_HANDLE ||
-            state.rgbaView != VK_NULL_HANDLE)
-        {
-            REX::ERROR(
-                "RGBA surface dimensions changed on an existing produced-frame Vulkan state."
-            );
-
-            return false;
-        }
-
-        const auto createImage =
-            loadVulkanDeviceProc<PFN_vkCreateImage>(
-                vkDeviceContext,
-                "vkCreateImage"
-            );
-
-        const auto getImageMemoryRequirements =
-            loadVulkanDeviceProc<PFN_vkGetImageMemoryRequirements>(
-                vkDeviceContext,
-                "vkGetImageMemoryRequirements"
-            );
-
-        const auto allocateMemory =
-            loadVulkanDeviceProc<PFN_vkAllocateMemory>(
-                vkDeviceContext,
-                "vkAllocateMemory"
-            );
-
-        const auto bindImageMemory =
-            loadVulkanDeviceProc<PFN_vkBindImageMemory>(
-                vkDeviceContext,
-                "vkBindImageMemory"
-            );
-
-        const auto createImageView =
-            loadVulkanDeviceProc<PFN_vkCreateImageView>(
-                vkDeviceContext,
-                "vkCreateImageView"
-            );
-
-        const auto getPhysicalDeviceMemoryProperties =
-            loadVulkanInstanceProc<PFN_vkGetPhysicalDeviceMemoryProperties>(
-                vkDeviceContext,
-                "vkGetPhysicalDeviceMemoryProperties"
-            );
-
-        if (
-            createImage == nullptr ||
-            getImageMemoryRequirements == nullptr ||
-            allocateMemory == nullptr ||
-            bindImageMemory == nullptr ||
-            createImageView == nullptr ||
-            getPhysicalDeviceMemoryProperties == nullptr)
-        {
-            REX::ERROR(
-                "Failed to load Vulkan RGBA-surface functions."
-            );
-
-            return false;
-        }
-
-        VkImageCreateInfo imageInfo{};
-        imageInfo.sType =
-            VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        imageInfo.imageType =
-            VK_IMAGE_TYPE_2D;
-        imageInfo.format =
-            VK_FORMAT_R8G8B8A8_UNORM;
-        imageInfo.extent = {
-            static_cast<std::uint32_t>(width),
-            static_cast<std::uint32_t>(height),
-            1
-        };
-        imageInfo.mipLevels = 1;
-        imageInfo.arrayLayers = 1;
-        imageInfo.samples =
-            VK_SAMPLE_COUNT_1_BIT;
-        imageInfo.tiling =
-            VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage =
-            VK_IMAGE_USAGE_STORAGE_BIT |
-            VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-            VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        imageInfo.sharingMode =
-            VK_SHARING_MODE_EXCLUSIVE;
-        imageInfo.initialLayout =
-            VK_IMAGE_LAYOUT_UNDEFINED;
-
-        const VkResult imageResult =
-            createImage(
-                state.device,
-                &imageInfo,
-                state.allocator,
-                &state.rgbaImage
-            );
-
-        if (imageResult != VK_SUCCESS)
-        {
-            REX::ERROR(
-                "Failed to create Vulkan RGBA scratch image: {}",
-                static_cast<int>(imageResult)
-            );
-
-            return false;
-        }
-
-        VkMemoryRequirements requirements{};
-        getImageMemoryRequirements(
-            state.device,
-            state.rgbaImage,
-            &requirements
-        );
-
-        VkPhysicalDeviceMemoryProperties memoryProperties{};
-        getPhysicalDeviceMemoryProperties(
-            vkDeviceContext.phys_dev,
-            &memoryProperties
-        );
-
-        std::uint32_t memoryTypeIndex = 0;
-
-        if (!chooseMemoryType(
-                requirements.memoryTypeBits,
-                memoryProperties,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                memoryTypeIndex))
-        {
-            REX::ERROR(
-                "No compatible Vulkan memory type exists for the RGBA scratch image."
-            );
-
-            return false;
-        }
-
-        VkMemoryAllocateInfo allocationInfo{};
-        allocationInfo.sType =
-            VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocationInfo.allocationSize =
-            requirements.size;
-        allocationInfo.memoryTypeIndex =
-            memoryTypeIndex;
-
-        const VkResult allocationResult =
-            allocateMemory(
-                state.device,
-                &allocationInfo,
-                state.allocator,
-                &state.rgbaMemory
-            );
-
-        if (allocationResult != VK_SUCCESS)
-        {
-            REX::ERROR(
-                "Failed to allocate Vulkan RGBA scratch memory: {}",
-                static_cast<int>(allocationResult)
-            );
-
-            return false;
-        }
-
-        const VkResult bindResult =
-            bindImageMemory(
-                state.device,
-                state.rgbaImage,
-                state.rgbaMemory,
-                0
-            );
-
-        if (bindResult != VK_SUCCESS)
-        {
-            REX::ERROR(
-                "Failed to bind Vulkan RGBA scratch memory: {}",
-                static_cast<int>(bindResult)
-            );
-
-            return false;
-        }
-
-        VkImageViewCreateInfo viewInfo{};
-        viewInfo.sType =
-            VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image =
-            state.rgbaImage;
-        viewInfo.viewType =
-            VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format =
-            VK_FORMAT_R8G8B8A8_UNORM;
-        viewInfo.subresourceRange.aspectMask =
-            VK_IMAGE_ASPECT_COLOR_BIT;
-        viewInfo.subresourceRange.baseMipLevel = 0;
-        viewInfo.subresourceRange.levelCount = 1;
-        viewInfo.subresourceRange.baseArrayLayer = 0;
-        viewInfo.subresourceRange.layerCount = 1;
-
-        const VkResult viewResult =
-            createImageView(
-                state.device,
-                &viewInfo,
-                state.allocator,
-                &state.rgbaView
-            );
-
-        if (viewResult != VK_SUCCESS)
-        {
-            REX::ERROR(
-                "Failed to create Vulkan RGBA scratch view: {}",
-                static_cast<int>(viewResult)
-            );
-
-            return false;
-        }
-
-        state.rgbaWidth =
-            static_cast<std::uint32_t>(width);
-        state.rgbaHeight =
-            static_cast<std::uint32_t>(height);
-
-        REX::TRACE(
-            "Prepared Vulkan RGBA scratch surface: {}x{}, VkImage={}",
-            width,
-            height,
-            reinterpret_cast<void*>(
-                state.rgbaImage
-            )
-        );
-
-        REX::DEBUG(
-            "Vulkan RGBA checkpoint active: produced output will be diagnostic magenta until YUV sampling is wired in."
-        );
-
-        return true;
-    }
-
-    bool ensureVulkanCommandResources(
-        producedFrameVulkanState& state,
-        AVVulkanDeviceContext& vkDeviceContext)
-    {
-        if (
-            state.commandPool != VK_NULL_HANDLE &&
-            state.commandBuffer != VK_NULL_HANDLE &&
-            state.queue != VK_NULL_HANDLE)
-        {
-            return true;
-        }
-
-        if (!chooseVulkanProducerQueueFamily(
-                vkDeviceContext,
-                state.queueFamilyIndex))
-        {
-            REX::ERROR(
-                "No Vulkan compute/transfer queue family is available for frame production."
-            );
-
-            return false;
-        }
-
-        const auto getDeviceQueue =
-            loadVulkanDeviceProc<PFN_vkGetDeviceQueue>(
-                vkDeviceContext,
-                "vkGetDeviceQueue"
-            );
-
-        const auto createCommandPool =
-            loadVulkanDeviceProc<PFN_vkCreateCommandPool>(
-                vkDeviceContext,
-                "vkCreateCommandPool"
-            );
-
-        const auto allocateCommandBuffers =
-            loadVulkanDeviceProc<PFN_vkAllocateCommandBuffers>(
-                vkDeviceContext,
-                "vkAllocateCommandBuffers"
-            );
-
-        if (
-            getDeviceQueue == nullptr ||
-            createCommandPool == nullptr ||
-            allocateCommandBuffers == nullptr)
-        {
-            REX::ERROR(
-                "Failed to load Vulkan command-buffer functions."
-            );
-
-            return false;
-        }
-
-        getDeviceQueue(
-            state.device,
-            state.queueFamilyIndex,
-            0,
-            &state.queue
-        );
-
-        if (state.queue == VK_NULL_HANDLE)
-        {
-            REX::ERROR(
-                "Failed to retrieve Vulkan producer queue."
-            );
-
-            return false;
-        }
-
-        VkCommandPoolCreateInfo poolInfo{};
-        poolInfo.sType =
-            VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        poolInfo.flags =
-            VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        poolInfo.queueFamilyIndex =
-            state.queueFamilyIndex;
-
-        const VkResult poolResult =
-            createCommandPool(
-                state.device,
-                &poolInfo,
-                state.allocator,
-                &state.commandPool
-            );
-
-        if (poolResult != VK_SUCCESS)
-        {
-            REX::ERROR(
-                "Failed to create Vulkan producer command pool: {}",
-                static_cast<int>(poolResult)
-            );
-
-            return false;
-        }
-
-        VkCommandBufferAllocateInfo commandInfo{};
-        commandInfo.sType =
-            VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        commandInfo.commandPool =
-            state.commandPool;
-        commandInfo.level =
-            VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        commandInfo.commandBufferCount = 1;
-
-        const VkResult commandResult =
-            allocateCommandBuffers(
-                state.device,
-                &commandInfo,
-                &state.commandBuffer
-            );
-
-        if (commandResult != VK_SUCCESS)
-        {
-            REX::ERROR(
-                "Failed to allocate Vulkan producer command buffer: {}",
-                static_cast<int>(commandResult)
-            );
-
-            return false;
-        }
-
-        REX::TRACE(
-            "Prepared Vulkan producer queue family {}.",
-            state.queueFamilyIndex
-        );
-
-        return true;
-    }
-
-    bool submitVulkanFrame(
-        AVVkFrame& vkFrame,
-        AVHWFramesContext& framesContext,
-        AVVulkanFramesContext& vkFramesContext,
-        AVVulkanDeviceContext& vkDeviceContext,
-        producedFrameVulkanState& state)
-    {
-        (void)vkFrame;
-        (void)vkFramesContext;
-
-        if (
-            state.image == VK_NULL_HANDLE ||
-            state.memory == VK_NULL_HANDLE ||
-            state.rgbaImage == VK_NULL_HANDLE ||
-            state.rgbaMemory == VK_NULL_HANDLE ||
-            state.rgbaWidth == 0 ||
-            state.rgbaHeight == 0)
-        {
-            return false;
-        }
-
-        if (!ensureVulkanCommandResources(
-                state,
-                vkDeviceContext))
-        {
-            return false;
-        }
-
-        const auto resetCommandPool =
-            loadVulkanDeviceProc<PFN_vkResetCommandPool>(
-                vkDeviceContext,
-                "vkResetCommandPool"
-            );
-
-        const auto beginCommandBuffer =
-            loadVulkanDeviceProc<PFN_vkBeginCommandBuffer>(
-                vkDeviceContext,
-                "vkBeginCommandBuffer"
-            );
-
-        const auto cmdPipelineBarrier =
-            loadVulkanDeviceProc<PFN_vkCmdPipelineBarrier>(
-                vkDeviceContext,
-                "vkCmdPipelineBarrier"
-            );
-
-        const auto cmdClearColorImage =
-            loadVulkanDeviceProc<PFN_vkCmdClearColorImage>(
-                vkDeviceContext,
-                "vkCmdClearColorImage"
-            );
-
-        const auto cmdCopyImage =
-            loadVulkanDeviceProc<PFN_vkCmdCopyImage>(
-                vkDeviceContext,
-                "vkCmdCopyImage"
-            );
-
-        const auto endCommandBuffer =
-            loadVulkanDeviceProc<PFN_vkEndCommandBuffer>(
-                vkDeviceContext,
-                "vkEndCommandBuffer"
-            );
-
-        const auto queueSubmit =
-            loadVulkanDeviceProc<PFN_vkQueueSubmit>(
-                vkDeviceContext,
-                "vkQueueSubmit"
-            );
-
-        const auto queueWaitIdle =
-            loadVulkanDeviceProc<PFN_vkQueueWaitIdle>(
-                vkDeviceContext,
-                "vkQueueWaitIdle"
-            );
-
-        if (
-            resetCommandPool == nullptr ||
-            beginCommandBuffer == nullptr ||
-            cmdPipelineBarrier == nullptr ||
-            cmdClearColorImage == nullptr ||
-            cmdCopyImage == nullptr ||
-            endCommandBuffer == nullptr ||
-            queueSubmit == nullptr ||
-            queueWaitIdle == nullptr)
-        {
-            REX::ERROR(
-                "Failed to load Vulkan submission functions."
-            );
-
-            return false;
-        }
-
-        const VkResult resetResult =
-            resetCommandPool(
-                state.device,
-                state.commandPool,
-                0
-            );
-
-        if (resetResult != VK_SUCCESS)
-        {
-            REX::ERROR(
-                "Failed to reset Vulkan producer command pool: {}",
-                static_cast<int>(resetResult)
-            );
-
-            return false;
-        }
-
-        VkCommandBufferBeginInfo beginInfo{};
-        beginInfo.sType =
-            VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        beginInfo.flags =
-            VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-        const VkResult beginResult =
-            beginCommandBuffer(
-                state.commandBuffer,
-                &beginInfo
-            );
-
-        if (beginResult != VK_SUCCESS)
-        {
-            REX::ERROR(
-                "Failed to begin Vulkan producer command buffer: {}",
-                static_cast<int>(beginResult)
-            );
-
-            return false;
-        }
-
-        VkImageSubresourceRange colorRange{};
-        colorRange.aspectMask =
-            VK_IMAGE_ASPECT_COLOR_BIT;
-        colorRange.baseMipLevel = 0;
-        colorRange.levelCount = 1;
-        colorRange.baseArrayLayer = 0;
-        colorRange.layerCount = 1;
-
-        VkImageMemoryBarrier rgbaToDestination{};
-        rgbaToDestination.sType =
-            VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        rgbaToDestination.srcAccessMask = 0;
-        rgbaToDestination.dstAccessMask =
-            VK_ACCESS_TRANSFER_WRITE_BIT;
-        rgbaToDestination.oldLayout =
-            VK_IMAGE_LAYOUT_UNDEFINED;
-        rgbaToDestination.newLayout =
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        rgbaToDestination.srcQueueFamilyIndex =
-            VK_QUEUE_FAMILY_IGNORED;
-        rgbaToDestination.dstQueueFamilyIndex =
-            VK_QUEUE_FAMILY_IGNORED;
-        rgbaToDestination.image =
-            state.rgbaImage;
-        rgbaToDestination.subresourceRange =
-            colorRange;
-
-        cmdPipelineBarrier(
-            state.commandBuffer,
-            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT,
-            0,
-            0,
-            nullptr,
-            0,
-            nullptr,
-            1,
-            &rgbaToDestination
-        );
-
-        // Diagnostic checkpoint: until the YUV sampling shader is wired in,
-        // fill the canonical RGBA scratch surface with magenta. If the produced
-        // TGA is magenta, Vulkan scratch -> imported D3D11 texture is proven.
-        VkClearColorValue checkpointColor{};
-        checkpointColor.float32[0] = 1.0f;
-        checkpointColor.float32[1] = 0.0f;
-        checkpointColor.float32[2] = 1.0f;
-        checkpointColor.float32[3] = 1.0f;
-
-        cmdClearColorImage(
-            state.commandBuffer,
-            state.rgbaImage,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            &checkpointColor,
-            1,
-            &colorRange
-        );
-
-        VkImageMemoryBarrier rgbaToSource{};
-        rgbaToSource.sType =
-            VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        rgbaToSource.srcAccessMask =
-            VK_ACCESS_TRANSFER_WRITE_BIT;
-        rgbaToSource.dstAccessMask =
-            VK_ACCESS_TRANSFER_READ_BIT;
-        rgbaToSource.oldLayout =
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        rgbaToSource.newLayout =
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        rgbaToSource.srcQueueFamilyIndex =
-            VK_QUEUE_FAMILY_IGNORED;
-        rgbaToSource.dstQueueFamilyIndex =
-            VK_QUEUE_FAMILY_IGNORED;
-        rgbaToSource.image =
-            state.rgbaImage;
-        rgbaToSource.subresourceRange =
-            colorRange;
-
-        VkImageMemoryBarrier outputAcquire{};
-        outputAcquire.sType =
-            VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        outputAcquire.srcAccessMask = 0;
-        outputAcquire.dstAccessMask =
-            VK_ACCESS_TRANSFER_WRITE_BIT;
-        outputAcquire.oldLayout =
-            VK_IMAGE_LAYOUT_GENERAL;
-        outputAcquire.newLayout =
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        outputAcquire.srcQueueFamilyIndex =
-            VK_QUEUE_FAMILY_EXTERNAL;
-        outputAcquire.dstQueueFamilyIndex =
-            state.queueFamilyIndex;
-        outputAcquire.image =
-            state.image;
-        outputAcquire.subresourceRange =
-            colorRange;
-
-        VkImageMemoryBarrier preCopyBarriers[2]{
-            rgbaToSource,
-            outputAcquire
-        };
-
-        cmdPipelineBarrier(
-            state.commandBuffer,
-            VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT,
-            0,
-            0,
-            nullptr,
-            0,
-            nullptr,
-            2,
-            preCopyBarriers
-        );
-
-        VkImageCopy copyRegion{};
-        copyRegion.srcSubresource.aspectMask =
-            VK_IMAGE_ASPECT_COLOR_BIT;
-        copyRegion.srcSubresource.mipLevel = 0;
-        copyRegion.srcSubresource.baseArrayLayer = 0;
-        copyRegion.srcSubresource.layerCount = 1;
-        copyRegion.dstSubresource =
-            copyRegion.srcSubresource;
-        copyRegion.extent = {
-            state.rgbaWidth,
-            state.rgbaHeight,
-            1
-        };
-
-        cmdCopyImage(
-            state.commandBuffer,
-            state.rgbaImage,
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            state.image,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            1,
-            &copyRegion
-        );
-
-        VkImageMemoryBarrier outputRelease{};
-        outputRelease.sType =
-            VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        outputRelease.srcAccessMask =
-            VK_ACCESS_TRANSFER_WRITE_BIT;
-        outputRelease.dstAccessMask = 0;
-        outputRelease.oldLayout =
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        outputRelease.newLayout =
-            VK_IMAGE_LAYOUT_GENERAL;
-        outputRelease.srcQueueFamilyIndex =
-            state.queueFamilyIndex;
-        outputRelease.dstQueueFamilyIndex =
-            VK_QUEUE_FAMILY_EXTERNAL;
-        outputRelease.image =
-            state.image;
-        outputRelease.subresourceRange =
-            colorRange;
-
-        cmdPipelineBarrier(
-            state.commandBuffer,
-            VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-            0,
-            0,
-            nullptr,
-            0,
-            nullptr,
-            1,
-            &outputRelease
-        );
-
-        const VkResult endResult =
-            endCommandBuffer(
-                state.commandBuffer
-            );
-
-        if (endResult != VK_SUCCESS)
-        {
-            REX::ERROR(
-                "Failed to end Vulkan producer command buffer: {}",
-                static_cast<int>(endResult)
-            );
-
-            return false;
-        }
-
-        VkSubmitInfo submitInfo{};
-        submitInfo.sType =
-            VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers =
-            &state.commandBuffer;
-
-        if (vkDeviceContext.lock_queue != nullptr)
-        {
-            vkDeviceContext.lock_queue(
-                framesContext.device_ctx,
-                state.queueFamilyIndex,
-                0
-            );
-        }
-
-        const VkResult submitResult =
-            queueSubmit(
-                state.queue,
-                1,
-                &submitInfo,
-                VK_NULL_HANDLE
-            );
-
-        VkResult waitResult =
-            VK_SUCCESS;
-
-        if (submitResult == VK_SUCCESS)
-        {
-            // Checkpoint only. This deliberately blocks so the following D3D11
-            // dump/read cannot race the Vulkan copy. Replace with keyed-mutex /
-            // semaphore handoff once the complete YUV path is validated.
-            waitResult =
-                queueWaitIdle(
-                    state.queue
+            transferred =
+                av_frame_alloc();
+
+            if (transferred == nullptr)
+            {
+                return false;
+            }
+
+            const int transferResult =
+                av_hwframe_transfer_data(
+                    transferred,
+                    &frame,
+                    0
                 );
+
+            if (transferResult < 0)
+            {
+                REX::ERROR(
+                    "Failed to transfer hardware frame to system memory: {}.",
+                    transferResult
+                );
+
+                av_frame_free(
+                    &transferred
+                );
+
+                return false;
+            }
+
+            source =
+                transferred;
         }
 
-        if (vkDeviceContext.unlock_queue != nullptr)
+        if (
+            source->width <= 0 ||
+            source->height <= 0)
         {
-            vkDeviceContext.unlock_queue(
-                framesContext.device_ctx,
-                state.queueFamilyIndex,
-                0
-            );
-        }
-
-        if (submitResult != VK_SUCCESS)
-        {
-            REX::ERROR(
-                "Vulkan producer queue submission failed: {}",
-                static_cast<int>(submitResult)
+            av_frame_free(
+                &transferred
             );
 
             return false;
         }
 
-        if (waitResult != VK_SUCCESS)
+        const int width =
+            source->width;
+
+        const int height =
+            source->height;
+
+        const auto sourceFormat =
+            static_cast<AVPixelFormat>(
+                source->format
+            );
+
+        SwsContext* sws =
+            sws_getContext(
+                width,
+                height,
+                sourceFormat,
+                width,
+                height,
+                AV_PIX_FMT_RGBA,
+                SWS_BILINEAR,
+                nullptr,
+                nullptr,
+                nullptr
+            );
+
+        if (sws == nullptr)
         {
+            av_frame_free(
+                &transferred
+            );
+
             REX::ERROR(
-                "Vulkan producer queue wait failed: {}",
-                static_cast<int>(waitResult)
+                "Failed to create swscale context for produced frame."
             );
 
             return false;
         }
+
+        output.width =
+            width;
+
+        output.height =
+            height;
+
+        output.stride =
+            width * 4;
+
+        output.pixels.resize(
+            static_cast<std::size_t>(
+                output.stride
+            ) *
+            static_cast<std::size_t>(
+                height
+            )
+        );
+
+        std::uint8_t* destinationData[4]{
+            output.pixels.data(),
+            nullptr,
+            nullptr,
+            nullptr
+        };
+
+        int destinationStride[4]{
+            output.stride,
+            0,
+            0,
+            0
+        };
+
+        const int convertedHeight =
+            sws_scale(
+                sws,
+                source->data,
+                source->linesize,
+                0,
+                height,
+                destinationData,
+                destinationStride
+            );
+
+        sws_freeContext(
+            sws
+        );
+
+        av_frame_free(
+            &transferred
+        );
+
+        if (convertedHeight != height)
+        {
+            REX::ERROR(
+                "Produced frame conversion failed: {}/{} rows converted.",
+                convertedHeight,
+                height
+            );
+
+            return false;
+        }
+
+        return true;
+    }
+
+    bool createD3D11FrameFromRgba(
+        const convertedRgbaFrame& source,
+        producedFrame& output)
+    {
+        if (
+            source.width <= 0 ||
+            source.height <= 0 ||
+            source.stride <= 0 ||
+            source.pixels.empty())
+        {
+            return false;
+        }
+
+        auto* device =
+            getD3D11Device();
+
+        if (device == nullptr)
+        {
+            return false;
+        }
+
+        REX::W32::D3D11_TEXTURE2D_DESC textureDesc{};
+
+        textureDesc.width =
+            static_cast<std::uint32_t>(
+                source.width
+            );
+
+        textureDesc.height =
+            static_cast<std::uint32_t>(
+                source.height
+            );
+
+        textureDesc.mipLevels = 1;
+        textureDesc.arraySize = 1;
+
+        textureDesc.format =
+            REX::W32::DXGI_FORMAT_R8G8B8A8_UNORM;
+
+        textureDesc.sampleDesc.count = 1;
+        textureDesc.sampleDesc.quality = 0;
+
+        textureDesc.usage =
+            REX::W32::D3D11_USAGE_DEFAULT;
+
+        textureDesc.bindFlags =
+            REX::W32::D3D11_BIND_SHADER_RESOURCE;
+
+        textureDesc.cpuAccessFlags = 0;
+        textureDesc.miscFlags = 0;
+
+        REX::W32::D3D11_SUBRESOURCE_DATA initialData{};
+        initialData.sysMem =
+            source.pixels.data();
+        initialData.sysMemPitch =
+            static_cast<std::uint32_t>(
+                source.stride
+            );
+        initialData.sysMemSlicePitch =
+            static_cast<std::uint32_t>(
+                source.stride *
+                source.height
+            );
+
+        REX::W32::ID3D11Texture2D* texture =
+            nullptr;
+
+        REX::TRACE(
+            "Creating populated produced D3D11 texture: {}x{}",
+            source.width,
+            source.height
+        );
+
+        const auto textureResult =
+            device->CreateTexture2D(
+                &textureDesc,
+                &initialData,
+                &texture
+            );
+
+        if (
+            textureResult < 0 ||
+            texture == nullptr)
+        {
+            REX::ERROR(
+                "CreateTexture2D for produced frame failed: 0x{:08X}.",
+                static_cast<std::uint32_t>(
+                    textureResult
+                )
+            );
+
+            return false;
+        }
+
+        REX::W32::ID3D11ShaderResourceView* resourceView =
+            nullptr;
+
+        const auto viewResult =
+            device->CreateShaderResourceView(
+                texture,
+                nullptr,
+                &resourceView
+            );
+
+        if (
+            viewResult < 0 ||
+            resourceView == nullptr)
+        {
+            REX::ERROR(
+                "CreateShaderResourceView for produced frame failed: 0x{:08X}.",
+                static_cast<std::uint32_t>(
+                    viewResult
+                )
+            );
+
+            texture->Release();
+            return false;
+        }
+
+        output.texture =
+            texture;
+
+        output.resourceView =
+            resourceView;
+
+        output.width =
+            static_cast<std::uint32_t>(
+                source.width
+            );
+
+        output.height =
+            static_cast<std::uint32_t>(
+                source.height
+            );
+
+        return true;
+    }
+
+    bool produceHardwareFrameD3D11Ready(
+        const AVFrame* frame,
+        AVPixelFormat expectedFormat,
+        producedFrame& output)
+    {
+        if (
+            frame == nullptr ||
+            frame->format != expectedFormat)
+        {
+            return false;
+        }
+
+        convertedRgbaFrame rgba;
+
+        if (!convertFrameToRgba(
+                *frame,
+                rgba))
+        {
+            return false;
+        }
+
+        if (!createD3D11FrameFromRgba(
+                rgba,
+                output))
+        {
+            return false;
+        }
+
+        REX::TRACE(
+            "Produced D3D11-ready RGBA frame: {}x{}, texture={}, srv={}.",
+            output.width,
+            output.height,
+            static_cast<void*>(
+                output.texture
+            ),
+            static_cast<void*>(
+                output.resourceView
+            )
+        );
 
         return true;
     }
 }
+
 
 
 std::string makeFrameDumpPath(
@@ -1605,7 +501,8 @@ bool dumpProducedFrame(
         stagingTexture == nullptr)
     {
         REX::WARN(
-            "Failed to create produced-frame staging texture: 0x{:08X}",
+            "Failed to create produced-frame "
+            "staging texture: 0x{:08X}",
             static_cast<std::uint32_t>(
                 createResult
             )
@@ -1636,7 +533,8 @@ bool dumpProducedFrame(
     if (mapResult < 0)
     {
         REX::WARN(
-            "Failed to map produced-frame staging texture: 0x{:08X}",
+            "Failed to map produced-frame "
+            "staging texture: 0x{:08X}",
             static_cast<std::uint32_t>(
                 mapResult
             )
@@ -1819,7 +717,8 @@ bool dumpDecodedFrame(
             );
 
             REX::ERROR(
-                "Failed to create swscale context for decoded frame dump."
+                "Failed to create swscale context "
+                "for decoded frame dump."
             );
 
             return false;
@@ -1869,7 +768,8 @@ bool dumpDecodedFrame(
         if (convertedHeight != height)
         {
             REX::ERROR(
-                "Decoded frame conversion failed: {}/{} rows converted.",
+                "Decoded frame conversion failed: "
+                "{}/{} rows converted.",
                 convertedHeight,
                 height
             );
@@ -2199,30 +1099,14 @@ bool decoder::initializeHardwareDevice(
             : "unknown"
     );
 
-    AVDictionary* options = nullptr;
-
-    if (deviceType == AV_HWDEVICE_TYPE_VULKAN)
-    {
-        av_dict_set(
-            &options,
-            "device_extensions",
-            "VK_KHR_win32_keyed_mutex",
-            0
-        );
-    }
-
     const int result =
         av_hwdevice_ctx_create(
             &hardwareDeviceContext,
             deviceType,
             nullptr,
-            options,
+            nullptr,
             0
         );
-
-    av_dict_free(
-        &options
-    );
 
     if (result < 0)
     {
@@ -2249,43 +1133,6 @@ bool decoder::initializeHardwareDevice(
     return true;
 }
 
-std::shared_ptr<producedFrame>
-decoder::acquireProducedFrame(
-    int width,
-    int height)
-{
-    std::scoped_lock lock(producedFramesMutex);
-
-    for (auto& output : producedFrames)
-    {
-        if (
-            output.use_count() == 1 &&
-            output->width ==
-                static_cast<std::uint32_t>(width) &&
-            output->height ==
-                static_cast<std::uint32_t>(height))
-        {
-            return output;
-        }
-    }
-
-    auto output =
-        createProducedFrame(width, height);
-
-    if (!output)
-        return nullptr;
-
-    producedFrames.emplace_back(output);
-
-    REX::TRACE(
-        "Produced frame pool grew to {} surfaces.",
-        producedFrames.size()
-    );
-
-    return output;
-}
-
-
 namespace
 {
     std::atomic<std::uint64_t>
@@ -2296,18 +1143,6 @@ namespace
     std::string frameDumpPath;
 }
 
-void decoder::clearProducedFrames()
-{
-
-    {
-        std::scoped_lock lock(
-            producedFramesMutex
-        );
-
-        producedFrames.clear();
-    }
-}
-
 std::shared_ptr<producedFrame>
 decoder::frameProduce(
     const AVFrame* frame)
@@ -2316,13 +1151,7 @@ decoder::frameProduce(
         return nullptr;
 
     auto output =
-        acquireProducedFrame(
-            frame->width,
-            frame->height
-        );
-
-    if (!output)
-        return nullptr;
+        std::make_shared<producedFrame>();
 
     const bool vulkan =
         frame->format ==
@@ -2349,6 +1178,13 @@ decoder::frameProduce(
                 frame,
                 *output
             );
+    }
+    else
+    {
+        REX::TRACE(
+            "Unsupported produced-frame hardware format: {}.",
+            frame->format
+        );
     }
 
     const auto dumpGeneration =
@@ -2389,8 +1225,7 @@ decoder::frameProduce(
                     outputPath.c_str()))
             {
                 REX::WARN(
-                    "Produced frame asset "
-                    "was not dumped."
+                    "Produced frame asset was not dumped."
                 );
             }
         }
@@ -2411,7 +1246,11 @@ decoder::frameProduce(
 
 producedFrame::~producedFrame()
 {
-    vulkanState.reset();
+    if (resourceView != nullptr)
+    {
+        resourceView->Release();
+        resourceView = nullptr;
+    }
 
     if (texture != nullptr)
     {
@@ -2420,194 +1259,28 @@ producedFrame::~producedFrame()
     }
 }
 
-std::shared_ptr<producedFrame>
-decoder::createProducedFrame(
-    int width,
-    int height)
-{
-    if (width <= 0 || height <= 0)
-    {
-        return nullptr;
-    }
-
-    auto* device =
-        getD3D11Device();
-
-    if (device == nullptr)
-    {
-        return nullptr;
-    }
-
-    REX::W32::D3D11_TEXTURE2D_DESC textureDesc{};
-
-    textureDesc.width =
-        static_cast<std::uint32_t>(width);
-
-    textureDesc.height =
-        static_cast<std::uint32_t>(height);
-
-    textureDesc.mipLevels = 1;
-    textureDesc.arraySize = 1;
-
-    textureDesc.format =
-        REX::W32::DXGI_FORMAT_R8G8B8A8_UNORM;
-
-    textureDesc.sampleDesc.count = 1;
-    textureDesc.sampleDesc.quality = 0;
-
-    textureDesc.usage =
-        REX::W32::D3D11_USAGE_DEFAULT;
-
-    textureDesc.bindFlags =
-        REX::W32::D3D11_BIND_SHADER_RESOURCE |
-        REX::W32::D3D11_BIND_RENDER_TARGET;
-
-    textureDesc.cpuAccessFlags = 0;
-
-    textureDesc.miscFlags =
-        REX::W32::D3D11_RESOURCE_MISC_SHARED_NTHANDLE |
-        REX::W32::D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-
-    auto output =
-        std::make_shared<producedFrame>();
-
-    REX::TRACE(
-        "Creating produced D3D11 texture: {}x{}",
-        width,
-        height
-    );
-
-    const auto result =
-        device->CreateTexture2D(
-            &textureDesc,
-            nullptr,
-            &output->texture
-        );
-
-    REX::TRACE(
-        "CreateTexture2D returned 0x{:08X}, texture={}",
-        static_cast<std::uint32_t>(result),
-        static_cast<void*>(output->texture)
-    );
-
-    if (result < 0)
-    {
-        return nullptr;
-    }
-
-    output->width =
-        static_cast<std::uint32_t>(width);
-
-    output->height =
-        static_cast<std::uint32_t>(height);
-
-    return output;
-}
-
 bool decoder::frameProduceVulkan(
     const AVFrame* frame,
     producedFrame& output)
 {
     if (
         frame == nullptr ||
-        output.texture == nullptr ||
-        frame->format != AV_PIX_FMT_VULKAN ||
-        frame->data[0] == nullptr ||
-        frame->hw_frames_ctx == nullptr)
-    {
-        return false;
-    }
-
-    auto* vkFrame =
-        reinterpret_cast<AVVkFrame*>(
-            frame->data[0]
-        );
-
-    auto* framesContext =
-        reinterpret_cast<AVHWFramesContext*>(
-            frame->hw_frames_ctx->data
-        );
-
-    if (
-        framesContext == nullptr ||
-        framesContext->device_ctx == nullptr ||
-        framesContext->hwctx == nullptr)
-    {
-        return false;
-    }
-
-    auto* vkFramesContext =
-        static_cast<AVVulkanFramesContext*>(
-            framesContext->hwctx
-        );
-
-    auto* vkDeviceContext =
-        static_cast<AVVulkanDeviceContext*>(
-            framesContext->device_ctx->hwctx
-        );
-
-    if (
-        vkFrame == nullptr ||
-        vkFramesContext == nullptr ||
-        vkDeviceContext == nullptr)
-    {
-        return false;
-    }
-
-    if (!output.vulkanState)
-    {
-        if (!ensureProducedFrameVulkanState(
-                output,
-                *framesContext,
-                *vkDeviceContext))
-        {
-            return false;
-        }
-    }
-
-    auto& outputState =
-        *output.vulkanState;
-
-    REX::TRACE(
-        "Producing Vulkan frame: {}x{}, VkImage={}",
-        frame->width,
-        frame->height,
-        reinterpret_cast<void*>(
-            vkFrame->img[0]
-        )
-    ); // Checkpoint, we've by this point proven a Vulkan decoded frame and it's state. From here on we are preparing to send it ownward to Fallout's D3D11 device.
-
-    if (!ensureVulkanRgbaSurface(
-            outputState,
-            *framesContext,
-            *vkFramesContext,
-            *vkDeviceContext,
-            frame->width,
-            frame->height))
-    {
-        return false;
-    }
-
-    if (!submitVulkanFrame(
-            *vkFrame,
-            *framesContext,
-            *vkFramesContext,
-            *vkDeviceContext,
-            outputState))
+        frame->format != AV_PIX_FMT_VULKAN)
     {
         return false;
     }
 
     REX::TRACE(
-        "Submitting Vulkan RGBA surface: {}x{}, VkImage={}",
+        "Producing Vulkan hardware frame as D3D11-ready RGBA: {}x{}.",
         frame->width,
-        frame->height,
-        reinterpret_cast<void*>(
-            outputState.rgbaImage
-        )
-    ); // Final checkpoint where we can now confirm if we've properly converted.
+        frame->height
+    );
 
-    return true;
+    return produceHardwareFrameD3D11Ready(
+        frame,
+        AV_PIX_FMT_VULKAN,
+        output
+    );
 }
 
 bool decoder::frameProduceD3D11(
@@ -2616,17 +1289,22 @@ bool decoder::frameProduceD3D11(
 {
     if (
         frame == nullptr ||
-        output.texture == nullptr ||
         frame->format != AV_PIX_FMT_D3D11)
     {
         return false;
     }
 
-    // TODO:
-    // Convert/copy FFmpeg D3D11 frame into
-    // canonical output.texture.
+    REX::TRACE(
+        "Producing D3D11VA hardware frame as Fallout D3D11-ready RGBA: {}x{}.",
+        frame->width,
+        frame->height
+    );
 
-    return false;
+    return produceHardwareFrameD3D11Ready(
+        frame,
+        AV_PIX_FMT_D3D11,
+        output
+    );
 }
 
 void frameDump(
@@ -3158,7 +1836,6 @@ bool decoder::initializeVideoDecoder()
 
         decoderDraining = false;
         decoderEOF = false;
-        clearProducedFrames();
     }
             //Get ffmpeg logs.
     namespace

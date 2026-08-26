@@ -2,9 +2,6 @@
 
 #include <cstdint>
 #include <memory>
-#include <mutex>
-#include <vector>
-#include <cstddef>
 
 extern "C"
 {
@@ -13,24 +10,19 @@ extern "C"
 #include <libavutil/hwcontext.h>
 }
 
+namespace REX::W32
+{
+    struct ID3D11Texture2D;
+    struct ID3D11ShaderResourceView;
+}
+
 namespace f4ffmpeg
 {
-
-    struct producedFrameVulkanState;
-
     void initializeFFmpegLogging();
 
     void frameDump(
-    const char* outputPath
+        const char* outputPath
     );
-
-    void initializeFFmpegLogging();
-
-    void frameDump(
-    const char* outputPath
-    );
-
-
 
     enum class decodeStatus
     {
@@ -40,13 +32,15 @@ namespace f4ffmpeg
         ffmpegError
     };
 
-
     struct decodeResult
     {
         decodeStatus status;
         int ffmpegError = 0;
     };
 
+    // Canonical producer output. Regardless of whether FFmpeg decoded with
+    // Vulkan or D3D11VA, a successful frameProduce() returns a Fallout-device
+    // RGBA texture and its ready-to-bind SRV.
     struct producedFrame
     {
         producedFrame() = default;
@@ -60,16 +54,12 @@ namespace f4ffmpeg
         ) = delete;
 
         REX::W32::ID3D11Texture2D* texture = nullptr;
+        REX::W32::ID3D11ShaderResourceView* resourceView = nullptr;
 
         std::uint32_t width = 0;
         std::uint32_t height = 0;
 
         double timestamp = -1.0;
-
-        std::unique_ptr<
-        producedFrameVulkanState
-        > vulkanState;
-
 
         ~producedFrame();
     };
@@ -96,7 +86,6 @@ namespace f4ffmpeg
         ) const;
 
         double getCurrentTimestamp() const;
-
         double getDuration() const;
 
         bool seek(
@@ -104,25 +93,6 @@ namespace f4ffmpeg
         );
 
     private:
-        std::shared_ptr<producedFrame>
-        createProducedFrame(
-        int width,
-        int height
-        );
-
-        std::shared_ptr<producedFrame>
-        acquireProducedFrame(
-            int width,
-            int height
-        );
-
-        void clearProducedFrames();
-
-        std::vector<std::shared_ptr<producedFrame>>
-            producedFrames;
-
-        std::mutex producedFramesMutex;
-
         bool frameProduceVulkan(
             const AVFrame* frame,
             producedFrame& output
@@ -157,9 +127,8 @@ namespace f4ffmpeg
         bool decoderDraining = false;
         bool decoderEOF = false;
         double currentTimestamp = -1.0;
+
         std::uint64_t handledDecodedFrameDumpGeneration = 0;
         std::uint64_t handledProducedFrameDumpGeneration = 0;
-
-
     };
 }
