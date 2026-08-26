@@ -1175,18 +1175,18 @@ namespace f4ffmpeg
         }
 
         bool containsAddressRange(
-            const REL::Segment& segment,
+            const REX::FModuleSection& segment,
             std::uintptr_t address,
             std::size_t size)
         {
-            if (size > segment.size())
+            if (size > segment.GetSize())
                 return false;
 
             const auto begin =
-                segment.address();
+                segment.GetAddress();
 
             const auto end =
-                begin + segment.size();
+                begin + segment.GetSize();
 
             return
                 address >= begin &&
@@ -1195,23 +1195,23 @@ namespace f4ffmpeg
 
         std::optional<std::uintptr_t>
         findBytesInSegment(
-            const REL::Segment& segment,
+            const REX::FModuleSection& segment,
             std::string_view bytes)
         {
             if (
                 bytes.empty() ||
-                bytes.size() + 1 > segment.size())
+                bytes.size() + 1 > segment.GetSize())
             {
                 return std::nullopt;
             }
 
             const auto* begin =
                 reinterpret_cast<const char*>(
-                    segment.address()
+                    segment.GetAddress()
                 );
 
             const auto* end =
-                begin + segment.size() -
+                begin + segment.GetSize() -
                     bytes.size() - 1;
 
             for (const char* current = begin;
@@ -1239,18 +1239,14 @@ namespace f4ffmpeg
         std::optional<std::uintptr_t>
         findEffectShaderPropertyTypeDescriptor()
         {
-            auto& module =
-                REL::Module::get();
+            const auto module =
+                REX::FModule::GetExecutingModule();
 
             const auto data =
-                module.segment(
-                    REL::Segment::Name::data
-                );
+                module.GetSection(".data");
 
             const auto rdata =
-                module.segment(
-                    REL::Segment::Name::rdata
-                );
+                module.GetSection(".rdata");
 
             // Fallout's engine types live in the executable's global namespace.
             // Keep the RE-qualified spelling as a harmless fallback for forks or
@@ -1287,7 +1283,7 @@ namespace f4ffmpeg
 
                     if (
                         *nameAddress <
-                        segment->address() +
+                        segment->GetAddress() +
                             typeDescriptorPrefixSize)
                     {
                         continue;
@@ -1316,16 +1312,14 @@ namespace f4ffmpeg
         std::optional<std::uintptr_t>
         findEffectShaderPropertyVtable()
         {
-            auto& module =
-                REL::Module::get();
+            const auto module =
+                REX::FModule::GetExecutingModule();
 
             const auto moduleBase =
-                module.base();
+                module.GetBaseAddress();
 
             const auto rdata =
-                module.segment(
-                    REL::Segment::Name::rdata
-                );
+                module.GetSection(".rdata");
 
             const auto typeDescriptor =
                 findEffectShaderPropertyTypeDescriptor();
@@ -1355,11 +1349,11 @@ namespace f4ffmpeg
                 completeObjectLocators;
 
             const auto rdataBegin =
-                rdata.address();
+                rdata.GetAddress();
 
             const auto rdataEnd =
                 rdataBegin +
-                rdata.size();
+                rdata.GetSize();
 
             for (
                 std::uintptr_t address =
@@ -1692,8 +1686,12 @@ namespace f4ffmpeg
                 )
             );
 
-            REL::safe_write(
-                getRenderPassesSlot,
+            REL::Relocation<std::uintptr_t> effectVtable{
+                *vtable
+            };
+
+            effectVtable.write_vfunc(
+                effectGetRenderPassesVtableIndex,
                 replacement
             );
 
