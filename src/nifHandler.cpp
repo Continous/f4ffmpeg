@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "nifHandler.h"
 #include "manager.h"
+#include "config.h"
 
 #include <algorithm>
 #include <array>
@@ -47,13 +48,18 @@ namespace f4ffmpeg
         constexpr std::string_view ddsSuffix =
             ".dds";
 
-        // MKV is our first-class video extension. Otherwise any other of these sensible ffmpeg containers will work. Keep in mind ffmpeg does not, generally speaking, respect the file extension but instead actually inspects the container. So while renaming a .mov file to .mkv will move it up in or preference list here; it is still a .mov file, and will not have the .mkv-expected files/behavior. Expect issues from wrong extensions.
+        constexpr std::string_view workshopTvStaticTexture =
+            "textures\\effects\\tvanim\\rasterscananim_d.dds";
+
+        // Keep .mov first for backward-compatible collision precedence.
+        // The decoder itself is FFmpeg-backed; nifHandler only needs to avoid
+        // treating unrelated Data\\Video sidecars/config files as video inputs.
         constexpr std::array<std::string_view, 12>
             supportedVideoExtensions{
-                ".mkv",
                 ".mov",
                 ".mp4",
                 ".m4v",
+                ".mkv",
                 ".webm",
                 ".avi",
                 ".wmv",
@@ -67,7 +73,9 @@ namespace f4ffmpeg
         constexpr std::size_t psSetShaderResourcesVtableIndex =
             8;
 
-        // BSEffectShaderProperty overrides both of these BSShaderProperty virtuals. GetRenderPasses is the reliable draw-time boundary; the original GetBaseTexture slot gives us Bethesda's exact source NiTexture.
+        // BSEffectShaderProperty overrides both of these BSShaderProperty
+        // virtuals. GetRenderPasses is the reliable draw-time boundary; the
+        // original GetBaseTexture slot gives us Bethesda's exact source NiTexture.
         constexpr std::size_t effectGetRenderPassesVtableIndex =
             0x2B;
 
@@ -149,7 +157,9 @@ namespace f4ffmpeg
                         extension,
                         supportedVideoExtensions[index]))
                 {
-                    // Earlier entries have higher precedence. This makes .mkv win stem collisions.
+                    // Earlier entries have higher precedence. This makes .mov
+                    // win stem collisions, preserving the behavior of releases
+                    // that only recognized .mov.
                     return static_cast<int>(
                         supportedVideoExtensions.size() - index
                     );
@@ -221,7 +231,9 @@ namespace f4ffmpeg
             return normalized;
         }
 
-        // Bethesda returns texture names in both "Textures\..." and root-relative forms (for example "Effects\TVAnim\..."). Keep one canonical lookup namespace so BGSM/texture-set and BGEM/effect paths meet the same index.
+        // Bethesda returns texture names in both "Textures\..." and root-relative
+        // forms (for example "Effects\TVAnim\..."). Keep one canonical lookup
+        // namespace so BGSM/texture-set and BGEM/effect paths meet the same index.
         std::string canonicalTextureLookupPath(
             std::string_view texturePath)
         {
@@ -243,7 +255,8 @@ namespace f4ffmpeg
                 );
             }
 
-            // NiTexture names are normally explicit DDS paths, but tolerate the extensionless form because the engine's texture APIs do as well.
+            // NiTexture names are normally explicit DDS paths, but tolerate the
+            // extensionless form because the engine's texture APIs do as well.
             const auto lastSlash =
                 canonical.find_last_of('\\');
 
@@ -584,6 +597,16 @@ namespace f4ffmpeg
             );
 
             return settings;
+        }
+
+        bool isWorkshopTvStaticTexture(
+            std::string_view texturePath)
+        {
+            return lowercasePath(
+                       canonicalTextureLookupPath(
+                           texturePath
+                       )
+                   ) == workshopTvStaticTexture;
         }
 
         const char* modeName(
@@ -1199,7 +1222,10 @@ namespace f4ffmpeg
             return texturePath;
         }
 
-        // F4SE's public reverse-engineered BSRenderData layout places the ID3D11ShaderResourceView at offset 0. CommonLib exposes the containing object as opaque BSGraphics::Texture, so only this first pointer is observed. We never mutate the object.
+        // F4SE's public reverse-engineered BSRenderData layout places the
+        // ID3D11ShaderResourceView at offset 0. CommonLib exposes the containing
+        // object as opaque BSGraphics::Texture, so only this first pointer is
+        // observed. We never mutate the object.
         struct rendererTexturePrefix
         {
             REX::W32::ID3D11ShaderResourceView*
@@ -1219,6 +1245,16 @@ namespace f4ffmpeg
             REX::W32::ID3D11ShaderResourceView*,
             std::shared_ptr<const videoTarget>>
             targetsByVanillaSrv;
+
+        std::unordered_set<
+            REX::W32::ID3D11ShaderResourceView*>
+            suppressedVanillaSrvs;
+
+        bool workshopTvStaticSuppressionEnabled =
+            false;
+
+        std::atomic_bool staticSuppressionObserved =
+            false;
 
         std::atomic_bool hasPresentationBindings =
             false;
@@ -1270,7 +1306,7 @@ namespace f4ffmpeg
             }
 
             REX::INFO(
-                "f4ffmpeg indexed texture '{}' reached acquisition, "
+                "f4ffmpeg handled texture '{}' reached acquisition, "
                 "but presentation binding is not ready: {}.",
                 texturePath
                     ? texturePath
@@ -1286,13 +1322,28 @@ namespace f4ffmpeg
             RE::NiTexture* niTexture,
             const char* sourceName)
         {
-            const auto target =
-                getVideoTargetForTexture(
+            const bool suppressStatic =
+                workshopTvStaticSuppressionEnabled &&
+                texturePath != nullptr &&
+                *texturePath != '\0' &&
+                isWorkshopTvStaticTexture(
                     texturePath
                 );
 
-            // A stable NiTexture with no indexed target needs no further work.
-            if (!target)
+            std::shared_ptr<const videoTarget>
+                target;
+
+            if (!suppressStatic)
+            {
+                target =
+                    getVideoTargetForTexture(
+                        texturePath
+                    );
+            }
+
+            // A stable NiTexture with neither an indexed video target nor the
+            // configured workshop-TV static suppression needs no further work.
+            if (!target && !suppressStatic)
                 return true;
 
             if (niTexture == nullptr)
@@ -1341,30 +1392,40 @@ namespace f4ffmpeg
                     bindingMutex
                 );
 
-                const auto existing =
-                    targetsByVanillaSrv.find(
-                        vanillaSrv
-                    );
-
-                if (existing == targetsByVanillaSrv.end())
+                if (suppressStatic)
                 {
-                    targetsByVanillaSrv.emplace(
-                        vanillaSrv,
-                        target
-                    );
-
-                    changed = true;
+                    changed =
+                        suppressedVanillaSrvs.emplace(
+                            vanillaSrv
+                        ).second;
                 }
-                else if (
-                    existing->second->getVideoPath() !=
-                        target->getVideoPath() &&
-                    modePriority(target->getMode()) >
-                        modePriority(existing->second->getMode()))
+                else
                 {
-                    existing->second =
-                        target;
+                    const auto existing =
+                        targetsByVanillaSrv.find(
+                            vanillaSrv
+                        );
 
-                    changed = true;
+                    if (existing == targetsByVanillaSrv.end())
+                    {
+                        targetsByVanillaSrv.emplace(
+                            vanillaSrv,
+                            target
+                        );
+
+                        changed = true;
+                    }
+                    else if (
+                        existing->second->getVideoPath() !=
+                            target->getVideoPath() &&
+                        modePriority(target->getMode()) >
+                            modePriority(existing->second->getMode()))
+                    {
+                        existing->second =
+                            target;
+
+                        changed = true;
+                    }
                 }
             }
 
@@ -1401,6 +1462,21 @@ namespace f4ffmpeg
                 {
                     return true;
                 }
+            }
+
+            if (suppressStatic)
+            {
+                REX::INFO(
+                    "Bound f4ffmpeg workshop-TV static suppression '{}' via {}.",
+                    canonicalTextureLookupPath(
+                        texturePath
+                    ),
+                    sourceName
+                        ? sourceName
+                        : "unknown"
+                );
+
+                return true;
             }
 
             REX::INFO(
@@ -1463,7 +1539,8 @@ namespace f4ffmpeg
             RE::NiPointer<RE::NiTexture>* texture,
             bool srgb)
         {
-            // Bethesda always owns acquisition. f4ffmpeg only registers a presentation override for the object Bethesda actually returned.
+            // Bethesda always owns acquisition. f4ffmpeg only registers a
+            // presentation override for the object Bethesda actually returned.
             originalGetTexturePrefetched(
                 textureSet,
                 prefetchedHandle,
@@ -1999,7 +2076,10 @@ namespace f4ffmpeg
                 textureName
             );
 
-            // A false result means this *is* an indexed texture but Bethesda has not attached its renderer texture/SRV yet. Leave it unsettled so a later render-pass request retries instead of permanently falling back to vanilla.
+            // A false result means this *is* an indexed texture but Bethesda has
+            // not attached its renderer texture/SRV yet. Leave it unsettled so a
+            // later render-pass request retries instead of permanently falling
+            // back to vanilla.
             if (registerNiTexturePresentationBinding(
                     textureName,
                     baseTexture,
@@ -2122,7 +2202,10 @@ namespace f4ffmpeg
         REX::W32::ID3D11ShaderResourceView* getProducedSrv(
             const producedFrame& frame)
         {
-            // The decoder now creates the Fallout-device SRV together with the texture. The producedFrame owns both COM references, and the shared_ptr held by the presentation hook keeps them alive through PSSetShaderResources. D3D11 retains its own reference once bound.
+            // The decoder now creates the Fallout-device SRV together with the
+            // texture. The producedFrame owns both COM references, and the
+            // shared_ptr held by the presentation hook keeps them alive through
+            // PSSetShaderResources. D3D11 retains its own reference once bound.
             return frame.resourceView;
         }
 
@@ -2201,6 +2284,7 @@ namespace f4ffmpeg
             );
 
             bool replacedAny = false;
+            bool presentedVideoFrame = false;
 
             for (
                 std::uint32_t index = 0;
@@ -2216,22 +2300,58 @@ namespace f4ffmpeg
                 std::shared_ptr<const videoTarget>
                     target;
 
+                bool suppress = false;
+
                 {
                     std::shared_lock lock(
                         bindingMutex
                     );
 
-                    const auto binding =
-                        targetsByVanillaSrv.find(
+                    suppress =
+                        suppressedVanillaSrvs.find(
                             vanillaSrv
-                        );
+                        ) != suppressedVanillaSrvs.end();
 
-                    if (binding == targetsByVanillaSrv.end())
-                        continue;
+                    if (!suppress)
+                    {
+                        const auto binding =
+                            targetsByVanillaSrv.find(
+                                vanillaSrv
+                            );
 
-                    target =
-                        binding->second;
+                        if (binding != targetsByVanillaSrv.end())
+                        {
+                            target =
+                                binding->second;
+                        }
+                    }
                 }
+
+                if (suppress)
+                {
+                    // A null D3D11 SRV is a legal unbound resource. Shader reads
+                    // return zero, which removes the raster/static effect without
+                    // creating or uploading an otherwise pointless replacement.
+                    replacementViews[index] =
+                        nullptr;
+
+                    replacedAny = true;
+
+                    if (!staticSuppressionObserved.exchange(
+                            true,
+                            std::memory_order_acq_rel
+                        ))
+                    {
+                        REX::INFO(
+                            "f4ffmpeg workshop-TV static suppression reached D3D11 presentation."
+                        );
+                    }
+
+                    continue;
+                }
+
+                if (!target)
+                    continue;
 
                 const auto frame =
                     target->getLatestFrame();
@@ -2241,7 +2361,8 @@ namespace f4ffmpeg
                     frame->texture == nullptr ||
                     frame->resourceView == nullptr)
                 {
-                    // No produced frame: use the exact vanilla SRV Fallout supplied. This is the normal fallback path.
+                    // No produced frame: use the exact vanilla SRV Fallout
+                    // supplied. This is the normal fallback path.
                     continue;
                 }
 
@@ -2257,10 +2378,11 @@ namespace f4ffmpeg
                     producedSrv;
 
                 replacedAny = true;
+                presentedVideoFrame = true;
             }
 
             if (
-                replacedAny &&
+                presentedVideoFrame &&
                 !presentationObserved.exchange(
                     true,
                     std::memory_order_acq_rel
@@ -2542,7 +2664,10 @@ namespace f4ffmpeg
             return existing->second;
         }
 
-        // Targets may be discovered before post-load manager dispatch. Keep the binding alive with a null playback pointer; dispatchVideoManagers() attaches the manager later without requiring Bethesda to reacquire the texture.
+        // Targets may be discovered before post-load manager dispatch. Keep
+        // the binding alive with a null playback pointer; dispatchVideoManagers()
+        // attaches the manager later without requiring Bethesda to reacquire the
+        // texture.
         auto target =
             std::make_shared<videoTarget>();
 
@@ -2725,7 +2850,10 @@ namespace f4ffmpeg
 
             ++runningVideos;
 
-            // A target may already be registered against Fallout's vanilla SRV from loading activity that occurred before this post-load event. Attach playback now so that existing presentation bindings become live without requiring the texture to be requested again.
+            // A target may already be registered against Fallout's vanilla SRV
+            // from loading activity that occurred before this post-load event.
+            // Attach playback now so that existing presentation bindings become
+            // live without requiring the texture to be requested again.
             std::scoped_lock targetLock(
                 targetRegistryMutex
             );
@@ -2792,6 +2920,16 @@ namespace f4ffmpeg
 
                 REX::INFO(
                     "Initializing f4ffmpeg texture replacement."
+                );
+
+                workshopTvStaticSuppressionEnabled =
+                    config::disableWorkshopTVStatic.GetValue();
+
+                REX::INFO(
+                    "f4ffmpeg workshop-TV static suppression is {}.",
+                    workshopTvStaticSuppressionEnabled
+                        ? "enabled"
+                        : "disabled"
                 );
 
                 if (!buildReplacementIndex())

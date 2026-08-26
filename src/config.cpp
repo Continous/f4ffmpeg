@@ -50,5 +50,10 @@ namespace f4ffmpeg::config
         settings->Load();
 
         applyLogLevel();
+
+        spdlog::debug(
+            "Textures.DisableWorkshopTVStatic={}",
+            disableWorkshopTVStatic.GetValue()
+        );
     }
 }

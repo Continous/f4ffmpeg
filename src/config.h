@@ -22,6 +22,14 @@ namespace f4ffmpeg::config
         0.250
     };
 
+    // Removes Fallout's RasterScanAnim_d.dds overlay from workshop TVs by
+    // suppressing that texture's SRV at the existing D3D11 presentation hook.
+    inline REX::TTomlSetting<bool> disableWorkshopTVStatic{
+        "Textures",
+        "DisableWorkshopTVStatic",
+        false
+    };
+
     inline REX::TTomlSetting<std::string> debugDecodeKey{
         "Debug",
         "DecodeKey",
