@@ -17,7 +17,7 @@ add_requires("ffmpeg", {
 
 -- set project constants
 set_project("f4ffmpeg")
-set_version("0.0.1")
+set_version("0.1.0")
 set_license("GPL-3.0")
 set_languages("c++23")
 set_warnings("allextra")

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <limits>
 #include <mutex>
@@ -46,15 +47,27 @@ namespace f4ffmpeg
         constexpr std::string_view ddsSuffix =
             ".dds";
 
-        constexpr std::string_view videoExtension =
-            ".mov";
+        // MKV is our first-class video extension. Otherwise any other of these sensible ffmpeg containers will work. Keep in mind ffmpeg does not, generally speaking, respect the file extension but instead actually inspects the container. So while renaming a .mov file to .mkv will move it up in or preference list here; it is still a .mov file, and will not have the .mkv-expected files/behavior. Expect issues from wrong extensions.
+        constexpr std::array<std::string_view, 12>
+            supportedVideoExtensions{
+                ".mkv",
+                ".mov",
+                ".mp4",
+                ".m4v",
+                ".webm",
+                ".avi",
+                ".wmv",
+                ".mpg",
+                ".mpeg",
+                ".ts",
+                ".m2ts",
+                ".ogv"
+            };
 
         constexpr std::size_t psSetShaderResourcesVtableIndex =
             8;
 
-        // BSEffectShaderProperty overrides both of these BSShaderProperty
-        // virtuals. GetRenderPasses is the reliable draw-time boundary; the
-        // original GetBaseTexture slot gives us Bethesda's exact source NiTexture.
+        // BSEffectShaderProperty overrides both of these BSShaderProperty virtuals. GetRenderPasses is the reliable draw-time boundary; the original GetBaseTexture slot gives us Bethesda's exact source NiTexture.
         constexpr std::size_t effectGetRenderPassesVtableIndex =
             0x2B;
 
@@ -124,6 +137,36 @@ namespace f4ffmpeg
             return true;
         }
 
+        int videoExtensionPriority(
+            std::string_view extension)
+        {
+            for (
+                std::size_t index = 0;
+                index < supportedVideoExtensions.size();
+                ++index)
+            {
+                if (endsWithInsensitive(
+                        extension,
+                        supportedVideoExtensions[index]))
+                {
+                    // Earlier entries have higher precedence. This makes .mkv win stem collisions.
+                    return static_cast<int>(
+                        supportedVideoExtensions.size() - index
+                    );
+                }
+            }
+
+            return -1;
+        }
+
+        bool isSupportedVideoPath(
+            const std::filesystem::path& path)
+        {
+            return videoExtensionPriority(
+                       path.extension().string()
+                   ) >= 0;
+        }
+
         std::string lowercasePath(
             std::string_view path)
         {
@@ -178,9 +221,7 @@ namespace f4ffmpeg
             return normalized;
         }
 
-        // Bethesda returns texture names in both "Textures\..." and root-relative
-        // forms (for example "Effects\TVAnim\..."). Keep one canonical lookup
-        // namespace so BGSM/texture-set and BGEM/effect paths meet the same index.
+        // Bethesda returns texture names in both "Textures\..." and root-relative forms (for example "Effects\TVAnim\..."). Keep one canonical lookup namespace so BGSM/texture-set and BGEM/effect paths meet the same index.
         std::string canonicalTextureLookupPath(
             std::string_view texturePath)
         {
@@ -202,8 +243,7 @@ namespace f4ffmpeg
                 );
             }
 
-            // NiTexture names are normally explicit DDS paths, but tolerate the
-            // extensionless form because the engine's texture APIs do as well.
+            // NiTexture names are normally explicit DDS paths, but tolerate the extensionless form because the engine's texture APIs do as well.
             const auto lastSlash =
                 canonical.find_last_of('\\');
 
@@ -219,6 +259,331 @@ namespace f4ffmpeg
             }
 
             return canonical;
+        }
+
+
+        std::string trimIniValue(
+            std::string_view value)
+        {
+            std::size_t begin = 0;
+            std::size_t end = value.size();
+
+            while (
+                begin < end &&
+                (value[begin] == ' ' ||
+                 value[begin] == '\t' ||
+                 value[begin] == '\r' ||
+                 value[begin] == '\n'))
+            {
+                ++begin;
+            }
+
+            while (
+                end > begin &&
+                (value[end - 1] == ' ' ||
+                 value[end - 1] == '\t' ||
+                 value[end - 1] == '\r' ||
+                 value[end - 1] == '\n'))
+            {
+                --end;
+            }
+
+            std::string result{
+                value.substr(
+                    begin,
+                    end - begin
+                )
+            };
+
+            if (
+                result.size() >= 2 &&
+                ((result.front() == '"' &&
+                  result.back() == '"') ||
+                 (result.front() == '\'' &&
+                  result.back() == '\'')))
+            {
+                result = result.substr(
+                    1,
+                    result.size() - 2
+                );
+            }
+
+            return result;
+        }
+
+        std::optional<bool> parseIniBool(
+            std::string_view value)
+        {
+            const std::string lowered =
+                lowercasePath(
+                    trimIniValue(value)
+                );
+
+            if (
+                lowered == "1" ||
+                lowered == "true" ||
+                lowered == "yes" ||
+                lowered == "on")
+            {
+                return true;
+            }
+
+            if (
+                lowered == "0" ||
+                lowered == "false" ||
+                lowered == "no" ||
+                lowered == "off")
+            {
+                return false;
+            }
+
+            return std::nullopt;
+        }
+
+        void appendPlaylistEntry(
+            videoPlaybackSettings& settings,
+            const std::filesystem::path& iniPath,
+            std::string_view value)
+        {
+            std::string entry =
+                trimIniValue(value);
+
+            if (entry.empty())
+                return;
+
+            std::filesystem::path entryPath{
+                entry
+            };
+
+            if (entryPath.is_relative())
+            {
+                entryPath =
+                    iniPath.parent_path() /
+                    entryPath;
+            }
+
+            settings.playlist.emplace_back(
+                entryPath.lexically_normal().string()
+            );
+        }
+
+        videoPlaybackSettings loadPlaybackSettings(
+            const std::filesystem::path& videoPath)
+        {
+            videoPlaybackSettings settings{};
+
+            std::filesystem::path iniPath =
+                videoPath;
+
+            iniPath.replace_extension(".ini");
+
+            std::error_code statusError;
+
+            const bool exists =
+                std::filesystem::is_regular_file(
+                    iniPath,
+                    statusError
+                );
+
+            if (statusError)
+            {
+                REX::WARN(
+                    "f4ffmpeg could not inspect playback INI '{}': {}.",
+                    iniPath.string(),
+                    statusError.message()
+                );
+
+                return settings;
+            }
+
+            if (!exists)
+                return settings;
+
+            std::ifstream input(
+                iniPath,
+                std::ios::in |
+                    std::ios::binary
+            );
+
+            if (!input)
+            {
+                REX::WARN(
+                    "f4ffmpeg could not open playback INI '{}'; using defaults.",
+                    iniPath.string()
+                );
+
+                return settings;
+            }
+
+            std::string section;
+            std::string line;
+            std::size_t lineNumber = 0;
+
+            while (std::getline(input, line))
+            {
+                ++lineNumber;
+
+                if (
+                    lineNumber == 1 &&
+                    line.size() >= 3 &&
+                    static_cast<unsigned char>(line[0]) == 0xEF &&
+                    static_cast<unsigned char>(line[1]) == 0xBB &&
+                    static_cast<unsigned char>(line[2]) == 0xBF)
+                {
+                    line.erase(0, 3);
+                }
+
+                std::string trimmed =
+                    trimIniValue(line);
+
+                if (
+                    trimmed.empty() ||
+                    trimmed.front() == ';' ||
+                    trimmed.front() == '#')
+                {
+                    continue;
+                }
+
+                if (
+                    trimmed.size() >= 2 &&
+                    trimmed.front() == '[' &&
+                    trimmed.back() == ']')
+                {
+                    section =
+                        lowercasePath(
+                            trimIniValue(
+                                std::string_view{trimmed}.substr(
+                                    1,
+                                    trimmed.size() - 2
+                                )
+                            )
+                        );
+
+                    continue;
+                }
+
+                const auto equals =
+                    trimmed.find('=');
+
+                if (equals == std::string::npos)
+                {
+                    REX::WARN(
+                        "f4ffmpeg ignored malformed playback INI line {} in '{}'.",
+                        lineNumber,
+                        iniPath.string()
+                    );
+
+                    continue;
+                }
+
+                const std::string key =
+                    lowercasePath(
+                        trimIniValue(
+                            std::string_view{trimmed}.substr(
+                                0,
+                                equals
+                            )
+                        )
+                    );
+
+                const std::string value =
+                    trimIniValue(
+                        std::string_view{trimmed}.substr(
+                            equals + 1
+                        )
+                    );
+
+                const bool playbackSection =
+                    section.empty() ||
+                    section == "playback";
+
+                if (
+                    playbackSection &&
+                    (key == "loop" ||
+                     key == "looping"))
+                {
+                    const auto parsed =
+                        parseIniBool(value);
+
+                    if (parsed)
+                    {
+                        settings.looping = *parsed;
+                    }
+                    else
+                    {
+                        REX::WARN(
+                            "f4ffmpeg ignored invalid Loop value '{}' on line {} of '{}'.",
+                            value,
+                            lineNumber,
+                            iniPath.string()
+                        );
+                    }
+
+                    continue;
+                }
+
+                if (
+                    playbackSection &&
+                    key == "shuffle")
+                {
+                    const auto parsed =
+                        parseIniBool(value);
+
+                    if (parsed)
+                    {
+                        settings.shuffle = *parsed;
+                    }
+                    else
+                    {
+                        REX::WARN(
+                            "f4ffmpeg ignored invalid Shuffle value '{}' on line {} of '{}'.",
+                            value,
+                            lineNumber,
+                            iniPath.string()
+                        );
+                    }
+
+                    continue;
+                }
+
+                if (
+                    (playbackSection &&
+                     (key == "playlist" ||
+                      key == "playlistitem")) ||
+                    (section == "playlist" &&
+                     (key == "item" ||
+                      key == "entry" ||
+                      key == "file")))
+                {
+                    appendPlaylistEntry(
+                        settings,
+                        iniPath,
+                        value
+                    );
+
+                    continue;
+                }
+
+                REX::WARN(
+                    "f4ffmpeg ignored unknown playback INI setting '{}={}' in section [{}] of '{}'.",
+                    key,
+                    value,
+                    section.empty()
+                        ? "Playback"
+                        : section,
+                    iniPath.string()
+                );
+            }
+
+            REX::INFO(
+                "f4ffmpeg loaded playback INI '{}': loop={}, shuffle={}, playlist entries={}.",
+                iniPath.string(),
+                settings.looping,
+                settings.shuffle,
+                settings.playlist.size()
+            );
+
+            return settings;
         }
 
         const char* modeName(
@@ -257,6 +622,7 @@ namespace f4ffmpeg
                 videoTargetMode::vanillaOverride;
 
             std::string videoPath;
+            videoPlaybackSettings playbackSettings;
         };
 
         struct resolvedVideoTarget
@@ -266,6 +632,7 @@ namespace f4ffmpeg
 
             std::string texturePath;
             std::string videoPath;
+            videoPlaybackSettings playbackSettings;
         };
 
         // Published once before hooks are installed, then read-only.
@@ -309,9 +676,37 @@ namespace f4ffmpeg
                 return;
             }
 
-            if (
-                modePriority(replacement.mode) >
-                modePriority(existing->second.mode))
+            const int replacementModePriority =
+                modePriority(replacement.mode);
+
+            const int existingModePriority =
+                modePriority(existing->second.mode);
+
+            const int replacementExtensionPriority =
+                videoExtensionPriority(
+                    std::filesystem::path(
+                        replacement.videoPath
+                    ).extension().string()
+                );
+
+            const int existingExtensionPriority =
+                videoExtensionPriority(
+                    std::filesystem::path(
+                        existing->second.videoPath
+                    ).extension().string()
+                );
+
+            const bool replacementWins =
+                replacementModePriority >
+                    existingModePriority ||
+                (
+                    replacementModePriority ==
+                        existingModePriority &&
+                    replacementExtensionPriority >
+                        existingExtensionPriority
+                );
+
+            if (replacementWins)
             {
                 REX::WARN(
                     "f4ffmpeg replacement collision for '{}': "
@@ -405,7 +800,9 @@ namespace f4ffmpeg
                 *gameRoot / "Data" / "Video";
 
             REX::INFO(
-                "Scanning loose f4ffmpeg videos at '{}'.",
+                "Scanning loose f4ffmpeg videos at '{}' "
+                "(supported containers: .mov, .mp4, .m4v, .mkv, .webm, "
+                ".avi, .wmv, .mpg, .mpeg, .ts, .m2ts, .ogv).",
                 root.string()
             );
 
@@ -466,11 +863,8 @@ namespace f4ffmpeg
                         statusError
                     ) &&
                     !statusError &&
-                    endsWithInsensitive(
+                    isSupportedVideoPath(
                         iterator->path()
-                            .extension()
-                            .string(),
-                        videoExtension
                     ))
                 {
                     videoFiles.emplace_back(
@@ -544,6 +938,11 @@ namespace f4ffmpeg
                 const std::string physicalVideoPath =
                     videoPath.string();
 
+                const videoPlaybackSettings playbackSettings =
+                    loadPlaybackSettings(
+                        videoPath
+                    );
+
                 std::string textureStem{
                     texturesPrefix
                 };
@@ -567,7 +966,8 @@ namespace f4ffmpeg
                     std::move(vanillaTexture),
                     indexedVideoReplacement{
                         videoTargetMode::vanillaOverride,
-                        physicalVideoPath
+                        physicalVideoPath,
+                        playbackSettings
                     }
                 );
 
@@ -575,7 +975,8 @@ namespace f4ffmpeg
                     std::move(directTexture),
                     indexedVideoReplacement{
                         videoTargetMode::directTextureSwap,
-                        physicalVideoPath
+                        physicalVideoPath,
+                        playbackSettings
                     }
                 );
 
@@ -627,7 +1028,8 @@ namespace f4ffmpeg
             return resolvedVideoTarget{
                 replacement->second.mode,
                 std::move(normalized),
-                replacement->second.videoPath
+                replacement->second.videoPath,
+                replacement->second.playbackSettings
             };
         }
 
@@ -797,10 +1199,7 @@ namespace f4ffmpeg
             return texturePath;
         }
 
-        // F4SE's public reverse-engineered BSRenderData layout places the
-        // ID3D11ShaderResourceView at offset 0. CommonLib exposes the containing
-        // object as opaque BSGraphics::Texture, so only this first pointer is
-        // observed. We never mutate the object.
+        // F4SE's public reverse-engineered BSRenderData layout places the ID3D11ShaderResourceView at offset 0. CommonLib exposes the containing object as opaque BSGraphics::Texture, so only this first pointer is observed. We never mutate the object.
         struct rendererTexturePrefix
         {
             REX::W32::ID3D11ShaderResourceView*
@@ -1064,8 +1463,7 @@ namespace f4ffmpeg
             RE::NiPointer<RE::NiTexture>* texture,
             bool srgb)
         {
-            // Bethesda always owns acquisition. f4ffmpeg only registers a
-            // presentation override for the object Bethesda actually returned.
+            // Bethesda always owns acquisition. f4ffmpeg only registers a presentation override for the object Bethesda actually returned.
             originalGetTexturePrefetched(
                 textureSet,
                 prefetchedHandle,
@@ -1601,10 +1999,7 @@ namespace f4ffmpeg
                 textureName
             );
 
-            // A false result means this *is* an indexed texture but Bethesda has
-            // not attached its renderer texture/SRV yet. Leave it unsettled so a
-            // later render-pass request retries instead of permanently falling
-            // back to vanilla.
+            // A false result means this *is* an indexed texture but Bethesda has not attached its renderer texture/SRV yet. Leave it unsettled so a later render-pass request retries instead of permanently falling back to vanilla.
             if (registerNiTexturePresentationBinding(
                     textureName,
                     baseTexture,
@@ -1727,10 +2122,7 @@ namespace f4ffmpeg
         REX::W32::ID3D11ShaderResourceView* getProducedSrv(
             const producedFrame& frame)
         {
-            // The decoder now creates the Fallout-device SRV together with the
-            // texture. The producedFrame owns both COM references, and the
-            // shared_ptr held by the presentation hook keeps them alive through
-            // PSSetShaderResources. D3D11 retains its own reference once bound.
+            // The decoder now creates the Fallout-device SRV together with the texture. The producedFrame owns both COM references, and the shared_ptr held by the presentation hook keeps them alive through PSSetShaderResources. D3D11 retains its own reference once bound.
             return frame.resourceView;
         }
 
@@ -1849,8 +2241,7 @@ namespace f4ffmpeg
                     frame->texture == nullptr ||
                     frame->resourceView == nullptr)
                 {
-                    // No produced frame: use the exact vanilla SRV Fallout
-                    // supplied. This is the normal fallback path.
+                    // No produced frame: use the exact vanilla SRV Fallout supplied. This is the normal fallback path.
                     continue;
                 }
 
@@ -2151,10 +2542,7 @@ namespace f4ffmpeg
             return existing->second;
         }
 
-        // Targets may be discovered before post-load manager dispatch. Keep
-        // the binding alive with a null playback pointer; dispatchVideoManagers()
-        // attaches the manager later without requiring Bethesda to reacquire the
-        // texture.
+        // Targets may be discovered before post-load manager dispatch. Keep the binding alive with a null playback pointer; dispatchVideoManagers() attaches the manager later without requiring Bethesda to reacquire the texture.
         auto target =
             std::make_shared<videoTarget>();
 
@@ -2166,6 +2554,9 @@ namespace f4ffmpeg
 
         target->videoPath =
             resolved->videoPath;
+
+        target->playbackSettings =
+            resolved->playbackSettings;
 
         {
             const std::string videoKey =
@@ -2202,11 +2593,17 @@ namespace f4ffmpeg
             dispatchMutex
         );
 
+        struct managerDispatchEntry
+        {
+            std::string videoPath;
+            videoPlaybackSettings playbackSettings;
+        };
+
         std::unordered_set<std::string>
             videoKeys;
 
-        std::vector<std::string>
-            videoPaths;
+        std::vector<managerDispatchEntry>
+            videos;
 
         videoKeys.reserve(
             replacementIndex.size()
@@ -2224,13 +2621,16 @@ namespace f4ffmpeg
 
             if (videoKeys.emplace(videoKey).second)
             {
-                videoPaths.emplace_back(
-                    replacement.videoPath
+                videos.emplace_back(
+                    managerDispatchEntry{
+                        replacement.videoPath,
+                        replacement.playbackSettings
+                    }
                 );
             }
         }
 
-        if (videoPaths.empty())
+        if (videos.empty())
         {
             REX::INFO(
                 "f4ffmpeg post-load manager dispatch found no indexed videos."
@@ -2242,8 +2642,11 @@ namespace f4ffmpeg
         std::size_t runningVideos = 0;
         std::size_t newlyDispatched = 0;
 
-        for (const auto& videoPath : videoPaths)
+        for (const auto& video : videos)
         {
+            const std::string& videoPath =
+                video.videoPath;
+
             const std::string videoKey =
                 lowercasePath(
                     videoPath
@@ -2272,7 +2675,7 @@ namespace f4ffmpeg
                 playback =
                     createManager(
                         videoPath.c_str(),
-                        true
+                        video.playbackSettings.looping
                     );
 
                 if (!playback)
@@ -2304,12 +2707,25 @@ namespace f4ffmpeg
                 );
             }
 
+            playback->setLooping(
+                video.playbackSettings.looping
+            );
+
+            if (
+                video.playbackSettings.shuffle ||
+                !video.playbackSettings.playlist.empty())
+            {
+                REX::DEBUG(
+                    "f4ffmpeg playback policy for '{}': shuffle={} and {} playlist entry/entries are parsed and bound but not consumed by manager yet.",
+                    videoPath,
+                    video.playbackSettings.shuffle,
+                    video.playbackSettings.playlist.size()
+                );
+            }
+
             ++runningVideos;
 
-            // A target may already be registered against Fallout's vanilla SRV
-            // from loading activity that occurred before this post-load event.
-            // Attach playback now so that existing presentation bindings become
-            // live without requiring the texture to be requested again.
+            // A target may already be registered against Fallout's vanilla SRV from loading activity that occurred before this post-load event. Attach playback now so that existing presentation bindings become live without requiring the texture to be requested again.
             std::scoped_lock targetLock(
                 targetRegistryMutex
             );
@@ -2341,11 +2757,11 @@ namespace f4ffmpeg
             "f4ffmpeg post-load manager dispatch complete: {} running, {} newly dispatched, {} indexed video(s).",
             runningVideos,
             newlyDispatched,
-            videoPaths.size()
+            videos.size()
         );
 
         return runningVideos ==
-            videoPaths.size();
+            videos.size();
     }
 
     bool initializeNifHandler()

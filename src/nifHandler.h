@@ -5,6 +5,7 @@
 #include <optional>
 #include <shared_mutex>
 #include <string>
+#include <vector>
 
 namespace f4ffmpeg
 {
@@ -15,6 +16,14 @@ namespace f4ffmpeg
     {
         vanillaOverride,
         directTextureSwap
+    };
+
+    struct videoPlaybackSettings
+    {
+        // Preserve the original f4ffmpeg behavior when no sidecar INI exists.
+        bool looping = true;
+        bool shuffle = false;
+        std::vector<std::string> playlist;
     };
 
     class videoTarget
@@ -35,6 +44,26 @@ namespace f4ffmpeg
             return videoPath;
         }
 
+        const videoPlaybackSettings& getPlaybackSettings() const noexcept
+        {
+            return playbackSettings;
+        }
+
+        bool isLooping() const noexcept
+        {
+            return playbackSettings.looping;
+        }
+
+        bool isShuffleEnabled() const noexcept
+        {
+            return playbackSettings.shuffle;
+        }
+
+        const std::vector<std::string>& getPlaylist() const noexcept
+        {
+            return playbackSettings.playlist;
+        }
+
         std::shared_ptr<const producedFrame>
         getLatestFrame() const;
 
@@ -49,6 +78,7 @@ namespace f4ffmpeg
 
         std::string texturePath;
         std::string videoPath;
+        videoPlaybackSettings playbackSettings;
 
         mutable std::shared_mutex playbackMutex;
         std::shared_ptr<manager> playback;
@@ -69,15 +99,15 @@ namespace f4ffmpeg
         const char* texturePath
     );
 
-    // Requires Fallout graphics to already be initialized. Scans loose .mov
-    // files beneath Data\Video, builds both vanilla and *_video.dds mappings,
-    // and installs both ordinary BSShaderTextureSet discovery and
-    // BSEffectShaderProperty base-texture discovery (used by vanilla effect /
-    // flipbook surfaces), plus the common D3D11 presentation hook. No
+    // Requires Fallout graphics to already be initialized. Scans supported
+    // loose FFmpeg video containers beneath Data\Video, builds both vanilla
+    // and *_video.dds mappings,
+    // and installs BSShaderTextureSet plus BSEffectShaderProperty base-texture
+    // discovery adapters feeding the common D3D11 presentation hook. No
     // decoder/producer managers are started here.
     bool initializeNifHandler();
 
-    // Starts one looping manager per indexed physical video. Intended to be
+    // Starts one manager per indexed physical video using its parsed playback policy. Intended to be
     // called only after a successful game load (F4SE kPostLoadGame). Safe to
     // call more than once; already-running videos are reused and failed starts
     // may be retried by a later call.
