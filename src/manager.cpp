@@ -56,6 +56,45 @@ manager::getLatestFrame() const
     return producerWorker.getLatestFrame();
 }
 
+bool manager::transitionToSource(
+    const std::string& nextPath)
+{
+    if (nextPath.empty())
+    {
+        return false;
+    }
+
+    lastSubmittedFrame = nullptr;
+
+    if (nextPath == inputPath)
+    {
+        if (!decoderWorker.rewind())
+        {
+            return false;
+        }
+
+        REX::TRACE(
+            "Manager rewound current source in place."
+        );
+        return true;
+    }
+
+    if (!decoderWorker.switchSource(
+            nextPath.c_str()))
+    {
+        return false;
+    }
+
+    inputPath = nextPath;
+
+    REX::TRACE(
+        "Manager transitioned to '{}' without restarting the producer/presentation path.",
+        inputPath
+    );
+
+    return true;
+}
+
 void manager::run()
 {
     while (!stopRequested)
@@ -80,19 +119,11 @@ void manager::run()
                 case decodeStatus::endOfFile:
                     if (looping)
                     {
-                        lastSubmittedFrame = nullptr;
-
-                        if (decoderWorker.start(
-                                inputPath.c_str()))
-                        {
-                            REX::TRACE(
-                                "Manager sent loop request."
-                            );
-                        }
-                        else
+                        if (!transitionToSource(
+                                inputPath))
                         {
                             REX::ERROR(
-                                "Manager reported failed loop request."
+                                "Manager reported failed loop transition."
                             );
 
                             stopRequested = true;

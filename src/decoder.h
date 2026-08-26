@@ -107,12 +107,21 @@ namespace f4ffmpeg
             AVHWDeviceType deviceType
         );
 
+        bool ensureHardwareDevice(
+            AVHWDeviceType deviceType
+        );
+
+        void closeSource();
+
         AVFormatContext* formatContext = nullptr;
         AVCodecContext* codecContext = nullptr;
 
         AVBufferRef* hardwareDeviceContext = nullptr;
 
         AVHWDeviceType hardwareDeviceType =
+            AV_HWDEVICE_TYPE_NONE;
+
+        AVHWDeviceType initializedHardwareDeviceType =
             AV_HWDEVICE_TYPE_NONE;
 
         AVPixelFormat hardwarePixelFormat =

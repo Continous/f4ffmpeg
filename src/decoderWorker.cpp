@@ -60,6 +60,143 @@ bool decodeWorker::start(const char* path)
     return true;
 }
 
+bool decodeWorker::rewind()
+{
+    if (running.load(
+            std::memory_order_acquire))
+    {
+        return false;
+    }
+
+    // EOF sets running=false immediately before the decode thread returns.
+    // Join it before touching workerDecoder so seek/flush cannot race the old
+    // decode loop.
+    if (workerThread.joinable())
+    {
+        workerThread.join();
+    }
+
+    if (!workerDecoder.seek(0.0))
+    {
+        REX::ERROR(
+            "Decode worker failed to rewind the existing decoder."
+        );
+
+        return false;
+    }
+
+    // Do not tear down the producer's last published frame; it can remain on
+    // screen until the first frame of the new loop is ready. Only clear the
+    // decode-worker publication so manager cannot resubmit the previous loop's
+    // final AVFrame after lastSubmittedFrame is reset.
+    latestFrame.store(
+        nullptr,
+        std::memory_order_release
+    );
+
+    lastStatus.store(
+        decodeStatus::stopped,
+        std::memory_order_release
+    );
+
+    lastFfmpegError.store(
+        0,
+        std::memory_order_release
+    );
+
+    stopRequested.store(
+        false,
+        std::memory_order_release
+    );
+
+    running.store(
+        true,
+        std::memory_order_release
+    );
+
+    workerThread = std::thread(
+        &decodeWorker::run,
+        this
+    );
+
+    REX::TRACE(
+        "Decode worker rewound in place without rebuilding the decoder."
+    );
+
+    return true;
+}
+
+bool decodeWorker::switchSource(
+    const char* path)
+{
+    if (
+        path == nullptr ||
+        running.load(
+            std::memory_order_acquire))
+    {
+        return false;
+    }
+
+    if (workerThread.joinable())
+    {
+        workerThread.join();
+    }
+
+    if (!workerDecoder.open(path))
+    {
+        REX::ERROR(
+            "Decode worker failed to open replacement source '{}'.",
+            path
+        );
+        return false;
+    }
+
+    if (!workerDecoder.initializeVideoDecoder())
+    {
+        REX::ERROR(
+            "Decode worker failed to initialize replacement source '{}'.",
+            path
+        );
+        return false;
+    }
+
+    latestFrame.store(
+        nullptr,
+        std::memory_order_release
+    );
+
+    lastStatus.store(
+        decodeStatus::stopped,
+        std::memory_order_release
+    );
+
+    lastFfmpegError.store(
+        0,
+        std::memory_order_release
+    );
+
+    stopRequested.store(
+        false,
+        std::memory_order_release
+    );
+
+    running.store(
+        true,
+        std::memory_order_release
+    );
+
+    workerThread = std::thread(
+        &decodeWorker::run,
+        this
+    );
+
+    REX::TRACE(
+        "Decode worker switched source without restarting the producer."
+    );
+
+    return true;
+}
+
 void decodeWorker::stop()
 {
     stopRequested.store(

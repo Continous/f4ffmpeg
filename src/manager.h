@@ -32,6 +32,12 @@ namespace f4ffmpeg
     private:
         void run();
 
+        // Unified playback transition. Rewinds same-source loops and switches
+        // different playlist/shuffle sources without restarting the producer.
+        bool transitionToSource(
+            const std::string& nextPath
+        );
+
         decodeWorker decoderWorker;
         producerWorker producerWorker;
 

@@ -1087,6 +1087,9 @@ bool decoder::initializeHardwareDevice(
         &hardwareDeviceContext
     );
 
+    initializedHardwareDeviceType =
+        AV_HWDEVICE_TYPE_NONE;
+
     const char* deviceName =
         av_hwdevice_get_type_name(
             deviceType
@@ -1123,6 +1126,9 @@ bool decoder::initializeHardwareDevice(
         return false;
     }
 
+    initializedHardwareDeviceType =
+        deviceType;
+
     REX::INFO(
         "FFmpeg hardware device initialized: {}",
         deviceName
@@ -1131,6 +1137,33 @@ bool decoder::initializeHardwareDevice(
     );
 
     return true;
+}
+
+bool decoder::ensureHardwareDevice(
+    AVHWDeviceType deviceType)
+{
+    if (
+        hardwareDeviceContext != nullptr &&
+        initializedHardwareDeviceType == deviceType)
+    {
+        const char* deviceName =
+            av_hwdevice_get_type_name(
+                deviceType
+            );
+
+        REX::TRACE(
+            "Reusing existing FFmpeg hardware device: {}",
+            deviceName
+                ? deviceName
+                : "unknown"
+        );
+
+        return true;
+    }
+
+    return initializeHardwareDevice(
+        deviceType
+    );
 }
 
 namespace
@@ -1559,7 +1592,6 @@ bool decoder::initializeVideoDecoder()
     if (codecContext != nullptr)
     {
         avcodec_free_context(&codecContext);
-        av_buffer_unref(&hardwareDeviceContext);
     }
 
     av_packet_free(&packet);
@@ -1653,7 +1685,7 @@ bool decoder::initializeVideoDecoder()
     }
 
 
-    if (!initializeHardwareDevice(
+    if (!ensureHardwareDevice(
             hardwareDeviceType))
     {
         if (
@@ -1692,7 +1724,7 @@ bool decoder::initializeVideoDecoder()
         hardwarePixelFormat =
             hardwareConfig->pix_fmt;
 
-        if (!initializeHardwareDevice(
+        if (!ensureHardwareDevice(
                 hardwareDeviceType))
         {
             avcodec_free_context(
@@ -1774,11 +1806,15 @@ bool decoder::initializeVideoDecoder()
         }
         bool decoder::open(const char* path)
     {
-        if (formatContext != nullptr)
+        if (path == nullptr)
         {
-            close();
-        } //If there is a formatContext we need to close it first.
+            return false;
+        }
 
+        // Source changes release only source-specific demuxer/codec state.
+        // Keep AVHWDeviceContext alive for compatible playlist/shuffle
+        // transitions.
+        closeSource();
 
         if (avformat_open_input(
                 &formatContext,
@@ -1786,8 +1822,7 @@ bool decoder::initializeVideoDecoder()
                 nullptr,
                 nullptr) < 0)
         {
-            formatContext = nullptr; //Release formatContext, we failed to open. Maybe have a failure flag?
-
+            formatContext = nullptr;
             return false;
         }
 
@@ -1795,8 +1830,7 @@ bool decoder::initializeVideoDecoder()
                 formatContext,
                 nullptr) < 0)
         {
-            close();
-
+            closeSource();
             return false;
         }
 
@@ -1814,28 +1848,48 @@ bool decoder::initializeVideoDecoder()
         return true;
     }
 
-    void decoder::close()
+    void decoder::closeSource()
     {
         av_packet_free(&packet);
 
         if (codecContext != nullptr)
         {
-            avcodec_free_context(&codecContext);
+            avcodec_free_context(
+                &codecContext
+            );
         }
-
-
-        av_buffer_unref(&hardwareDeviceContext);
 
         if (formatContext != nullptr)
         {
-            avformat_close_input(&formatContext);
+            avformat_close_input(
+                &formatContext
+            );
         }
 
         videoCodec = nullptr;
         videoStreamIndex = -1;
 
+        hardwarePixelFormat =
+            AV_PIX_FMT_NONE;
+
         decoderDraining = false;
         decoderEOF = false;
+        currentTimestamp = -1.0;
+    }
+
+    void decoder::close()
+    {
+        closeSource();
+
+        av_buffer_unref(
+            &hardwareDeviceContext
+        );
+
+        hardwareDeviceType =
+            AV_HWDEVICE_TYPE_NONE;
+
+        initializedHardwareDeviceType =
+            AV_HWDEVICE_TYPE_NONE;
     }
             //Get ffmpeg logs.
     namespace
