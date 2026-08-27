@@ -170,6 +170,24 @@ package("ffmpeg")
             configs,
             "--extra-cflags=-I" .. path.unix(vulkan:installdir("include"))
         )
+
+        -- FFmpeg's Windows NVDEC/NVENC probe normally discovers ffnvcodec
+        -- through pkg-config.  Our Xmake dependency already provides the
+        -- headers, so make the include path explicit and validate those
+        -- headers directly below instead of depending on MSYS pkg-config.
+        if package:config("nvdec") or package:config("nvenc") then
+            local nvcodec = package:dep("nv-codec-headers")
+            assert(nvcodec, "nv-codec-headers dependency is required for NVDEC/NVENC")
+
+            local nvcodec_include = nvcodec:installdir("include")
+            assert(os.isdir(path.join(nvcodec_include, "ffnvcodec")),
+                "nv-codec-headers was installed, but include/ffnvcodec could not be found")
+
+            table.insert(
+                configs,
+                "--extra-cflags=-I" .. path.unix(nvcodec_include)
+            )
+        end
         for name, enabled in table.orderpairs(package:configs()) do
             if not package:extraconf("configs", name, "builtin") then
                 if enabled then
@@ -274,45 +292,6 @@ package("ffmpeg")
         if package:is_plat("windows") then
             import("package.tools.autoconf")
             local envs = autoconf.buildenvs(package, {packagedeps = "libiconv"})
-
-            -- FFmpeg discovers ffnvcodec through pkg-config.  The Xmake
-            -- nv-codec-headers package is header-only on some Windows builds
-            -- and may not install upstream's ffnvcodec.pc, so create an
-            -- equivalent metadata file from the dependency's real prefix.
-            if package:config("nvdec") or package:config("nvenc") then
-                local nvcodec = package:dep("nv-codec-headers")
-                assert(nvcodec, "nv-codec-headers dependency is required for NVDEC/NVENC")
-
-                local nvcodec_include = nvcodec:installdir("include", "ffnvcodec")
-                assert(os.isdir(nvcodec_include),
-                    "nv-codec-headers was installed, but include/ffnvcodec could not be found")
-
-                local pkgconfig_dir = path.join(os.curdir(), ".xmake-ffnvcodec-pkgconfig")
-                os.mkdir(pkgconfig_dir)
-
-                local nvcodec_prefix = path.unix(nvcodec:installdir())
-                local nvcodec_version = tostring(nvcodec:version()):gsub("^n", "")
-                local pcfile = path.join(pkgconfig_dir, "ffnvcodec.pc")
-
-                io.writefile(pcfile, string.format([[prefix=%s
-includedir=${prefix}/include
-
-Name: ffnvcodec
-Description: FFmpeg version of Nvidia Codec SDK headers
-Version: %s
-Cflags: -I${includedir}
-]], nvcodec_prefix, nvcodec_version))
-
-                -- configure runs under MSYS2, whose pkg-config expects a
-                -- POSIX-style search path.  Put our generated metadata first.
-                local msys_pkgconfig_dir = path.cygwin(pkgconfig_dir)
-                if envs.PKG_CONFIG_PATH and #envs.PKG_CONFIG_PATH > 0 then
-                    envs.PKG_CONFIG_PATH = msys_pkgconfig_dir .. ":" .. envs.PKG_CONFIG_PATH
-                else
-                    envs.PKG_CONFIG_PATH = msys_pkgconfig_dir
-                end
-            end
-
             if not envs.PATH then -- Fix in xmake 2.9.8
                 local msvc = package:toolchain("msvc") or toolchain.load("msvc", {plat = package:plat(), arch = package:arch()})
                 envs.PATH = os.getenv("PATH") -- we need to reserve PATH on msys2
@@ -326,6 +305,40 @@ Cflags: -I${includedir}
             -- add gas-preprocessor to PATH
             if package:is_arch("arm", "arm64") then
                 envs.PATH = path.join(os.programdir(), "scripts") .. path.envsep() .. envs.PATH
+            end
+
+            -- On Windows/MSVC, nv-codec-headers is a header-only dependency.
+            -- FFmpeg 7.1 normally insists on resolving it through pkg-config,
+            -- which is brittle inside Xmake's MSYS2 configure environment.
+            -- Replace only the ffnvcodec pkg-config probe with a direct header
+            -- compile probe; FFmpeg still performs its later CUDA/CUVID feature
+            -- checks normally.
+            if package:config("nvdec") or package:config("nvenc") then
+                local old_ffnvcodec_probe = [[    check_pkg_config ffnvcodec "ffnvcodec >= 12.1.14.0" "$ffnv_hdr_list" "" || \
+      check_pkg_config ffnvcodec "ffnvcodec >= 12.0.16.1 ffnvcodec < 12.1" "$ffnv_hdr_list" "" || \
+      check_pkg_config ffnvcodec "ffnvcodec >= 11.1.5.3 ffnvcodec < 12.0" "$ffnv_hdr_list" "" || \
+      check_pkg_config ffnvcodec "ffnvcodec >= 11.0.10.3 ffnvcodec < 11.1" "$ffnv_hdr_list" "" || \
+      check_pkg_config ffnvcodec "ffnvcodec >= 8.1.24.15 ffnvcodec < 8.2" "$ffnv_hdr_list" ""]]
+
+                local new_ffnvcodec_probe = [[    disable ffnvcodec
+    check_headers "$ffnv_hdr_list" && enable ffnvcodec]]
+
+                io.replace(
+                    "configure",
+                    old_ffnvcodec_probe,
+                    new_ffnvcodec_probe,
+                    {plain = true}
+                )
+
+                local configure_text = io.readfile("configure")
+                assert(
+                    not configure_text:find(
+                        'check_pkg_config ffnvcodec "ffnvcodec >= 12.1.14.0"',
+                        1,
+                        true
+                    ),
+                    "failed to replace FFmpeg's ffnvcodec pkg-config probe"
+                )
             end
 
             -- fix build failure with gbk encoding
