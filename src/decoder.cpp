@@ -1,9 +1,11 @@
 #include "decoder.h"
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <fstream>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 #include "pch.h"
 #include "graphics.h"
@@ -856,11 +858,150 @@ bool dumpDecodedFrame(
             }
         }
 
-        REX::ERROR(
-            "FFmpeg did not offer the selected hardware pixel format."
+        // Do not silently drop into software here. Returning NONE makes the
+        // active backend fail cleanly so decoder::fallbackBackend() can try
+        // every remaining hardware implementation before software.
+        REX::WARN(
+            "FFmpeg did not offer the selected hardware pixel format; "
+            "requesting decoder-backend fallback."
         );
 
         return AV_PIX_FMT_NONE;
+    }
+
+    const char* backendLabel(
+        decoderBackendKind backend)
+    {
+        switch (backend)
+        {
+            case decoderBackendKind::nvdec:
+                return "NVDEC/CUDA";
+            case decoderBackendKind::qsv:
+                return "Intel QSV";
+            case decoderBackendKind::amf:
+                return "AMD AMF";
+            case decoderBackendKind::vulkan:
+                return "Vulkan Video";
+            case decoderBackendKind::d3d11va:
+                return "D3D11VA";
+            case decoderBackendKind::d3d12va:
+                return "D3D12VA";
+            case decoderBackendKind::dxva2:
+                return "DXVA2";
+            case decoderBackendKind::software:
+                return "software";
+        }
+
+        return "unknown";
+    }
+
+    const char* backendDeviceName(
+        decoderBackendKind backend)
+    {
+        switch (backend)
+        {
+            case decoderBackendKind::nvdec:
+                // FFmpeg exposes NVDEC through AV_HWDEVICE_TYPE_CUDA.
+                return "cuda";
+            case decoderBackendKind::qsv:
+                return "qsv";
+            case decoderBackendKind::amf:
+                return "amf";
+            case decoderBackendKind::vulkan:
+                return "vulkan";
+            case decoderBackendKind::d3d11va:
+                return "d3d11va";
+            case decoderBackendKind::d3d12va:
+                return "d3d12va";
+            case decoderBackendKind::dxva2:
+                return "dxva2";
+            case decoderBackendKind::software:
+                return nullptr;
+        }
+
+        return nullptr;
+    }
+
+    const AVCodec* resolveBackendCodec(
+        decoderBackendKind backend,
+        AVCodecID codecId,
+        const AVCodec* defaultCodec)
+    {
+        if (defaultCodec == nullptr)
+        {
+            return nullptr;
+        }
+
+        if (backend == decoderBackendKind::software)
+        {
+            return avcodec_find_decoder(
+                codecId
+            );
+        }
+
+        if (backend == decoderBackendKind::qsv)
+        {
+            // QSV decoder names do not always match avcodec_get_name() +
+            // "_qsv" (notably MPEG-2 is mpeg2_qsv, not mpeg2video_qsv).
+            const char* qsvDecoder = nullptr;
+
+            switch (codecId)
+            {
+                case AV_CODEC_ID_H264:
+                    qsvDecoder = "h264_qsv";
+                    break;
+                case AV_CODEC_ID_HEVC:
+                    qsvDecoder = "hevc_qsv";
+                    break;
+                case AV_CODEC_ID_AV1:
+                    qsvDecoder = "av1_qsv";
+                    break;
+                case AV_CODEC_ID_VP9:
+                    qsvDecoder = "vp9_qsv";
+                    break;
+                case AV_CODEC_ID_VP8:
+                    qsvDecoder = "vp8_qsv";
+                    break;
+                case AV_CODEC_ID_MPEG2VIDEO:
+                    qsvDecoder = "mpeg2_qsv";
+                    break;
+                case AV_CODEC_ID_MJPEG:
+                    qsvDecoder = "mjpeg_qsv";
+                    break;
+                default:
+                    break;
+            }
+
+            return qsvDecoder != nullptr
+                ? avcodec_find_decoder_by_name(
+                    qsvDecoder
+                )
+                : nullptr;
+        }
+
+        if (backend == decoderBackendKind::amf)
+        {
+            // FFmpeg versions with AMF decoding expose codec-specific
+            // *_amf decoders. Older builds simply return nullptr here.
+            const char* baseName =
+                avcodec_get_name(codecId);
+
+            if (baseName == nullptr)
+            {
+                return nullptr;
+            }
+
+            const std::string decoderName =
+                std::string(baseName) + "_amf";
+
+            return avcodec_find_decoder_by_name(
+                decoderName.c_str()
+            );
+        }
+
+        // NVDEC/CUDA and the generic hardware APIs are exposed as hardware
+        // configurations of FFmpeg's normal codec decoder.
+        return defaultCodec;
     }
 
     const AVCodecHWConfig* findHardwareConfig(
@@ -1080,91 +1221,6 @@ bool decoder::seek(
     return true;
 }
 
-bool decoder::initializeHardwareDevice(
-    AVHWDeviceType deviceType)
-{
-    av_buffer_unref(
-        &hardwareDeviceContext
-    );
-
-    initializedHardwareDeviceType =
-        AV_HWDEVICE_TYPE_NONE;
-
-    const char* deviceName =
-        av_hwdevice_get_type_name(
-            deviceType
-        );
-
-    REX::DEBUG(
-        "Trying FFmpeg hardware device: {}",
-        deviceName
-            ? deviceName
-            : "unknown"
-    );
-
-    const int result =
-        av_hwdevice_ctx_create(
-            &hardwareDeviceContext,
-            deviceType,
-            nullptr,
-            nullptr,
-            0
-        );
-
-    if (result < 0)
-    {
-        hardwareDeviceContext = nullptr;
-
-        REX::ERROR(
-            "Failed to create FFmpeg hardware device {}: {}",
-            deviceName
-                ? deviceName
-                : "unknown",
-            result
-        );
-
-        return false;
-    }
-
-    initializedHardwareDeviceType =
-        deviceType;
-
-    REX::INFO(
-        "FFmpeg hardware device initialized: {}",
-        deviceName
-            ? deviceName
-            : "unknown"
-    );
-
-    return true;
-}
-
-bool decoder::ensureHardwareDevice(
-    AVHWDeviceType deviceType)
-{
-    if (
-        hardwareDeviceContext != nullptr &&
-        initializedHardwareDeviceType == deviceType)
-    {
-        const char* deviceName =
-            av_hwdevice_get_type_name(
-                deviceType
-            );
-
-        REX::TRACE(
-            "Reusing existing FFmpeg hardware device: {}",
-            deviceName
-                ? deviceName
-                : "unknown"
-        );
-
-        return true;
-    }
-
-    return initializeHardwareDevice(
-        deviceType
-    );
-}
 
 namespace
 {
@@ -1186,36 +1242,66 @@ decoder::frameProduce(
     auto output =
         std::make_shared<producedFrame>();
 
-    const bool vulkan =
-        frame->format ==
-            AV_PIX_FMT_VULKAN;
+    const auto frameFormat =
+        static_cast<AVPixelFormat>(
+            frame->format
+        );
 
-    const bool d3d11 =
-        frame->format ==
-            AV_PIX_FMT_D3D11;
+    const char* formatName =
+        av_get_pix_fmt_name(
+            frameFormat
+        );
 
-    bool produced = false;
+    const AVPixFmtDescriptor* descriptor =
+        av_pix_fmt_desc_get(
+            frameFormat
+        );
 
-    if (vulkan)
+    const bool hardwareFrame =
+        descriptor != nullptr &&
+        (
+            descriptor->flags &
+            AV_PIX_FMT_FLAG_HWACCEL
+        ) != 0;
+
+    // Every backend converges here. Hardware frames (Vulkan, CUDA/NVDEC,
+    // QSV, AMF, D3D11/12, DXVA2...) are transferred to system memory by
+    // convertFrameToRgba(); software frames already live there. The Fallout
+    // presentation path therefore remains backend-agnostic and stable across
+    // fallback transitions.
+    convertedRgbaFrame rgba;
+
+    const bool produced =
+        convertFrameToRgba(
+            *frame,
+            rgba
+        ) &&
+        createD3D11FrameFromRgba(
+            rgba,
+            *output
+        );
+
+    if (produced)
     {
-        produced =
-            frameProduceVulkan(
-                frame,
-                *output
-            );
-    }
-    else if (d3d11)
-    {
-        produced =
-            frameProduceD3D11(
-                frame,
-                *output
-            );
+        REX::TRACE(
+            "Produced {} frame '{}' as Fallout D3D11-ready RGBA: {}x{}.",
+            hardwareFrame
+                ? "hardware-decoded"
+                : "software-decoded",
+            formatName
+                ? formatName
+                : "unknown",
+            output->width,
+            output->height
+        );
     }
     else
     {
-        REX::TRACE(
-            "Unsupported produced-frame hardware format: {}.",
+        REX::WARN(
+            "Failed to produce decoded frame format '{}' ({}).",
+            formatName
+                ? formatName
+                : "unknown",
             frame->format
         );
     }
@@ -1248,9 +1334,13 @@ decoder::frameProduce(
             const auto outputPath =
                 makeFrameDumpPath(
                     basePath,
-                    vulkan
-                        ? "vulkan"
-                        : "d3d11"
+                    formatName
+                        ? formatName
+                        : (
+                            hardwareFrame
+                                ? "hardware"
+                                : "software"
+                        )
                 );
 
             if (!dumpProducedFrame(
@@ -1489,6 +1579,43 @@ decodeResult decoder::decodeNextFrame(
 
         if (receiveResult != AVERROR(EAGAIN))
         {
+            if (
+                activeBackend == decoderBackendKind::software &&
+                receiveResult == AVERROR_INVALIDDATA)
+            {
+                // Software is the terminal backend. For damaged bitstreams,
+                // discard the decoder's corrupt state and keep reading rather
+                // than terminating playback.
+                REX::WARN(
+                    "Software decoder rejected corrupt frame data; flushing and continuing."
+                );
+
+                avcodec_flush_buffers(
+                    codecContext
+                );
+
+                decoderDraining = false;
+
+                av_frame_unref(
+                    outputFrame
+                );
+
+                continue;
+            }
+
+            if (fallbackBackend(
+                    receiveResult,
+                    "avcodec_receive_frame"))
+            {
+                av_frame_unref(
+                    outputFrame
+                );
+
+                return decodeNextFrame(
+                    outputFrame
+                );
+            }
+
             return {
                 decodeStatus::ffmpegError,
                 receiveResult
@@ -1519,7 +1646,12 @@ decodeResult decoder::decodeNextFrame(
                 );
                 REX::TRACE("We've received readResult: {}", readResult);
 
-            if (readResult < 0)
+            if (readResult == AVERROR(EAGAIN))
+            {
+                continue;
+            }
+
+            if (readResult == AVERROR_EOF)
             {
                 // Demuxer reached the end. Flush the decoder.
                 const int flushResult =
@@ -1534,6 +1666,15 @@ decodeResult decoder::decodeNextFrame(
                     flushResult < 0 &&
                     flushResult != AVERROR_EOF)
                 {
+                    if (fallbackBackend(
+                            flushResult,
+                            "decoder drain"))
+                    {
+                        return decodeNextFrame(
+                            outputFrame
+                        );
+                    }
+
                     return {
                         decodeStatus::ffmpegError,
                         flushResult
@@ -1542,6 +1683,46 @@ decodeResult decoder::decodeNextFrame(
 
                 break;
             }
+
+            if (readResult == AVERROR_INVALIDDATA)
+            {
+                // Demuxers commonly report isolated corrupt packets this way.
+                // Usually they advance past the damaged region, but cap the
+                // retry streak so a broken demuxer/input cannot spin forever.
+                ++consecutiveDemuxErrors;
+
+                if (consecutiveDemuxErrors <= 16)
+                {
+                    REX::WARN(
+                        "FFmpeg demuxer skipped invalid packet data (retry {}/16).",
+                        consecutiveDemuxErrors
+                    );
+
+                    continue;
+                }
+
+                REX::ERROR(
+                    "FFmpeg demuxer exceeded recoverable invalid-data retry budget."
+                );
+
+                return {
+                    decodeStatus::ffmpegError,
+                    readResult
+                };
+            }
+
+            if (readResult < 0)
+            {
+                // Genuine container/I/O failures are not decoder-backend
+                // failures. At this point there is no alternate decoder API
+                // that can repair an unreadable input source.
+                return {
+                    decodeStatus::ffmpegError,
+                    readResult
+                };
+            }
+
+            consecutiveDemuxErrors = 0;
 
             if (packet->stream_index != videoStreamIndex)
             {
@@ -1570,6 +1751,27 @@ decodeResult decoder::decodeNextFrame(
 
             if (sendResult < 0)
             {
+                if (
+                    activeBackend == decoderBackendKind::software &&
+                    sendResult == AVERROR_INVALIDDATA)
+                {
+                    REX::WARN(
+                        "Software decoder skipped an invalid compressed packet."
+                    );
+
+                    // packet was already unreferenced above; read the next one.
+                    continue;
+                }
+
+                if (fallbackBackend(
+                        sendResult,
+                        "avcodec_send_packet"))
+                {
+                    return decodeNextFrame(
+                        outputFrame
+                    );
+                }
+
                 return {
                     decodeStatus::ffmpegError,
                     sendResult
@@ -1582,6 +1784,503 @@ decodeResult decoder::decodeNextFrame(
 }
 
 
+void decoder::buildBackendOrder()
+{
+    backendCount = 0;
+    activeBackendIndex =
+        maxDecoderBackends;
+
+    const auto pushUnique =
+        [this](decoderBackendKind backend)
+        {
+            for (
+                std::size_t index = 0;
+                index < backendCount;
+                ++index)
+            {
+                if (backendOrder[index] == backend)
+                {
+                    return;
+                }
+            }
+
+            if (backendCount < maxDecoderBackends)
+            {
+                backendOrder[backendCount++] =
+                    backend;
+            }
+        };
+
+    // Prefer each vendor's native decoder when FFmpeg was built with it.
+    // Unsupported/compiled-out backends are skipped cheaply at runtime.
+    pushUnique(decoderBackendKind::nvdec);
+    pushUnique(decoderBackendKind::qsv);
+    pushUnique(decoderBackendKind::amf);
+
+    // Preserve a working generic device across playlist/shuffle transitions
+    // before probing the other cross-vendor APIs.
+    if (initializedHardwareDeviceType != AV_HWDEVICE_TYPE_NONE)
+    {
+        const char* currentName =
+            av_hwdevice_get_type_name(
+                initializedHardwareDeviceType
+            );
+
+        if (currentName != nullptr)
+        {
+            if (std::string_view(currentName) == "vulkan")
+                pushUnique(decoderBackendKind::vulkan);
+            else if (std::string_view(currentName) == "d3d11va")
+                pushUnique(decoderBackendKind::d3d11va);
+            else if (std::string_view(currentName) == "d3d12va")
+                pushUnique(decoderBackendKind::d3d12va);
+            else if (std::string_view(currentName) == "dxva2")
+                pushUnique(decoderBackendKind::dxva2);
+        }
+    }
+
+    pushUnique(decoderBackendKind::vulkan);
+    pushUnique(decoderBackendKind::d3d11va);
+    pushUnique(decoderBackendKind::d3d12va);
+    pushUnique(decoderBackendKind::dxva2);
+
+    // Software decode is deliberately last and is always present.
+    pushUnique(decoderBackendKind::software);
+}
+
+bool decoder::openBackend(
+    std::size_t backendIndex)
+{
+    if (
+        formatContext == nullptr ||
+        videoStreamIndex < 0 ||
+        videoStreamIndex >=
+            static_cast<int>(
+                formatContext->nb_streams
+            ) ||
+        videoCodec == nullptr ||
+        backendIndex >= backendCount)
+    {
+        return false;
+    }
+
+    const auto backend =
+        backendOrder[backendIndex];
+
+    AVStream* videoStream =
+        formatContext->streams[
+            videoStreamIndex
+        ];
+
+    if (videoStream == nullptr)
+    {
+        return false;
+    }
+
+    const AVCodecID codecId =
+        videoStream->codecpar->codec_id;
+
+    const AVCodec* candidateCodec =
+        resolveBackendCodec(
+            backend,
+            codecId,
+            videoCodec
+        );
+
+    if (candidateCodec == nullptr)
+    {
+        REX::TRACE(
+            "Decoder backend {} has no codec implementation for {}.",
+            backendLabel(backend),
+            avcodec_get_name(codecId)
+        );
+
+        return false;
+    }
+
+    AVHWDeviceType candidateDeviceType =
+        AV_HWDEVICE_TYPE_NONE;
+
+    const AVCodecHWConfig* hardwareConfig =
+        nullptr;
+
+    // A newly-created device is held locally until the codec has opened.
+    // This makes probing/fallback transactional: a candidate backend cannot
+    // destroy the currently-working device merely because device creation
+    // succeeded and avcodec_open2() failed afterward.
+    AVBufferRef* candidateDevice = nullptr;
+    AVBufferRef* deviceForCodec = nullptr;
+    bool reusingDevice = false;
+
+    if (backend != decoderBackendKind::software)
+    {
+        const char* deviceName =
+            backendDeviceName(backend);
+
+        candidateDeviceType =
+            deviceName != nullptr
+                ? av_hwdevice_find_type_by_name(
+                    deviceName
+                )
+                : AV_HWDEVICE_TYPE_NONE;
+
+        if (candidateDeviceType == AV_HWDEVICE_TYPE_NONE)
+        {
+            REX::TRACE(
+                "Decoder backend {} is not compiled into this FFmpeg build.",
+                backendLabel(backend)
+            );
+
+            return false;
+        }
+
+        hardwareConfig =
+            findHardwareConfig(
+                candidateCodec,
+                candidateDeviceType
+            );
+
+        if (hardwareConfig == nullptr)
+        {
+            REX::TRACE(
+                "Decoder backend {} is not advertised for codec {}.",
+                backendLabel(backend),
+                candidateCodec->name
+            );
+
+            return false;
+        }
+
+        if (
+            hardwareDeviceContext != nullptr &&
+            initializedHardwareDeviceType ==
+                candidateDeviceType)
+        {
+            deviceForCodec =
+                hardwareDeviceContext;
+
+            reusingDevice = true;
+        }
+        else
+        {
+            const char* deviceArgument =
+                deviceName != nullptr &&
+                std::string_view(deviceName) == "qsv"
+                    ? "auto"
+                    : nullptr;
+
+            REX::DEBUG(
+                "Trying FFmpeg hardware device for {}: {}",
+                backendLabel(backend),
+                deviceName
+                    ? deviceName
+                    : "unknown"
+            );
+
+            const int deviceResult =
+                av_hwdevice_ctx_create(
+                    &candidateDevice,
+                    candidateDeviceType,
+                    deviceArgument,
+                    nullptr,
+                    0
+                );
+
+            if (deviceResult < 0)
+            {
+                av_buffer_unref(
+                    &candidateDevice
+                );
+
+                REX::TRACE(
+                    "Decoder backend {} device creation failed: {}.",
+                    backendLabel(backend),
+                    deviceResult
+                );
+
+                return false;
+            }
+
+            deviceForCodec =
+                candidateDevice;
+        }
+    }
+
+    AVCodecContext* candidateContext =
+        avcodec_alloc_context3(
+            candidateCodec
+        );
+
+    if (candidateContext == nullptr)
+    {
+        av_buffer_unref(
+            &candidateDevice
+        );
+
+        return false;
+    }
+
+    if (avcodec_parameters_to_context(
+            candidateContext,
+            videoStream->codecpar) < 0)
+    {
+        avcodec_free_context(
+            &candidateContext
+        );
+
+        av_buffer_unref(
+            &candidateDevice
+        );
+
+        return false;
+    }
+
+    AVPixelFormat candidateHardwareFormat =
+        AV_PIX_FMT_NONE;
+
+    if (backend != decoderBackendKind::software)
+    {
+        candidateHardwareFormat =
+            hardwareConfig->pix_fmt;
+
+        // get_format can run inside avcodec_open2(). Point opaque at a local
+        // value while probing, then repoint it at the persistent member once
+        // this candidate becomes the active decoder.
+        candidateContext->opaque =
+            &candidateHardwareFormat;
+
+        candidateContext->get_format =
+            getHardwareFormat;
+
+        candidateContext->hw_device_ctx =
+            av_buffer_ref(
+                deviceForCodec
+            );
+
+        if (candidateContext->hw_device_ctx == nullptr)
+        {
+            avcodec_free_context(
+                &candidateContext
+            );
+
+            av_buffer_unref(
+                &candidateDevice
+            );
+
+            return false;
+        }
+    }
+
+    // Be permissive about damaged bitstreams. Backend failure/recovery is
+    // handled by f4ffmpeg; FFmpeg should decode through recoverable corruption
+    // whenever it can instead of escalating minor damage into a hard stop.
+    candidateContext->err_recognition =
+        AV_EF_IGNORE_ERR;
+
+    REX::INFO(
+        "Trying {} decoder '{}' for codec {}.",
+        backendLabel(backend),
+        candidateCodec->name,
+        avcodec_get_name(codecId)
+    );
+
+    const int openResult =
+        avcodec_open2(
+            candidateContext,
+            candidateCodec,
+            nullptr
+        );
+
+    if (openResult < 0)
+    {
+        REX::WARN(
+            "Decoder backend {} could not open codec {}: {}. Trying fallback.",
+            backendLabel(backend),
+            avcodec_get_name(codecId),
+            openResult
+        );
+
+        avcodec_free_context(
+            &candidateContext
+        );
+
+        av_buffer_unref(
+            &candidateDevice
+        );
+
+        return false;
+    }
+
+    AVPacket* candidatePacket =
+        av_packet_alloc();
+
+    if (candidatePacket == nullptr)
+    {
+        avcodec_free_context(
+            &candidateContext
+        );
+
+        av_buffer_unref(
+            &candidateDevice
+        );
+
+        return false;
+    }
+
+    // Commit only after device + codec + packet have all initialized.
+    if (backend != decoderBackendKind::software)
+    {
+        hardwarePixelFormat =
+            candidateHardwareFormat;
+
+        candidateContext->opaque =
+            &hardwarePixelFormat;
+
+        if (!reusingDevice)
+        {
+            av_buffer_unref(
+                &hardwareDeviceContext
+            );
+
+            hardwareDeviceContext =
+                candidateDevice;
+
+            candidateDevice =
+                nullptr;
+
+            initializedHardwareDeviceType =
+                candidateDeviceType;
+
+            REX::INFO(
+                "FFmpeg hardware device committed for decoder backend {}.",
+                backendLabel(backend)
+            );
+        }
+        else
+        {
+            REX::TRACE(
+                "Reusing persistent FFmpeg hardware device for decoder backend {}.",
+                backendLabel(backend)
+            );
+        }
+    }
+
+    av_packet_free(
+        &packet
+    );
+
+    if (codecContext != nullptr)
+    {
+        avcodec_free_context(
+            &codecContext
+        );
+    }
+
+    codecContext =
+        candidateContext;
+
+    packet =
+        candidatePacket;
+
+    activeCodec =
+        candidateCodec;
+
+    activeBackend =
+        backend;
+
+    activeBackendIndex =
+        backendIndex;
+
+    hardwareDeviceType =
+        candidateDeviceType;
+
+    if (backend == decoderBackendKind::software)
+    {
+        hardwareDeviceType =
+            AV_HWDEVICE_TYPE_NONE;
+
+        hardwarePixelFormat =
+            AV_PIX_FMT_NONE;
+    }
+
+    decoderDraining = false;
+    decoderEOF = false;
+
+    REX::INFO(
+        "Decoder backend active: {} (codec '{}').",
+        backendLabel(activeBackend),
+        activeCodec->name
+    );
+
+    return true;
+}
+
+bool decoder::fallbackBackend(
+    int ffmpegError,
+    const char* stage)
+{
+    if (activeBackendIndex >= backendCount)
+    {
+        return false;
+    }
+
+    if (activeBackend == decoderBackendKind::software)
+    {
+        return false;
+    }
+
+    const double resumeTimestamp =
+        std::isfinite(currentTimestamp) &&
+        currentTimestamp >= 0.0
+            ? currentTimestamp
+            : 0.0;
+
+    REX::WARN(
+        "Decoder backend {} failed during {} with FFmpeg error {}. "
+        "Falling through to the next backend.",
+        backendLabel(activeBackend),
+        stage ? stage : "decode",
+        ffmpegError
+    );
+
+    for (
+        std::size_t index =
+            activeBackendIndex + 1;
+        index < backendCount;
+        ++index)
+    {
+        if (!openBackend(index))
+        {
+            continue;
+        }
+
+        // The demuxer may already have consumed the packet that exposed the
+        // failed backend. Rewind to the last successfully presented timestamp
+        // (or zero before the first frame) before resuming on the new backend.
+        if (!seek(resumeTimestamp))
+        {
+            REX::WARN(
+                "Decoder backend {} opened, but seek to {:.3f}s after fallback failed. "
+                "Continuing from the demuxer's current position.",
+                backendLabel(activeBackend),
+                resumeTimestamp
+            );
+
+            decoderDraining = false;
+            decoderEOF = false;
+        }
+
+        REX::INFO(
+            "Decoder recovered from backend failure using {}.",
+            backendLabel(activeBackend)
+        );
+
+        return true;
+    }
+
+    return false;
+}
+
 bool decoder::initializeVideoDecoder()
 {
     if (formatContext == nullptr)
@@ -1589,216 +2288,55 @@ bool decoder::initializeVideoDecoder()
         return false;
     }
 
-    if (codecContext != nullptr)
-    {
-        avcodec_free_context(&codecContext);
-    }
-
-    av_packet_free(&packet);
-
-    videoStreamIndex = av_find_best_stream(
-        formatContext,
-        AVMEDIA_TYPE_VIDEO,
-        -1,
-        -1,
-        &videoCodec,
-        0
+    av_packet_free(
+        &packet
     );
 
-    if (videoStreamIndex < 0)
-    {
-        return false;
-    }
-
-    codecContext = avcodec_alloc_context3(videoCodec);
-
-    if (codecContext == nullptr)
-    {
-        return false;
-    }
-
-    AVStream* videoStream =
-        formatContext->streams[videoStreamIndex];
-
-    if (avcodec_parameters_to_context(
-            codecContext,
-            videoStream->codecpar) < 0)
+    if (codecContext != nullptr)
     {
         avcodec_free_context(
             &codecContext
         );
+    }
 
+    videoStreamIndex =
+        av_find_best_stream(
+            formatContext,
+            AVMEDIA_TYPE_VIDEO,
+            -1,
+            -1,
+            &videoCodec,
+            0
+        );
+
+    if (
+        videoStreamIndex < 0 ||
+        videoCodec == nullptr)
+    {
         return false;
     }
 
-    const AVCodecHWConfig* hardwareConfig =
-        findHardwareConfig(
-            videoCodec,
-            AV_HWDEVICE_TYPE_VULKAN
-        );
+    buildBackendOrder();
 
-    if (hardwareConfig != nullptr)
+    for (
+        std::size_t index = 0;
+        index < backendCount;
+        ++index)
     {
-        hardwareDeviceType =
-            AV_HWDEVICE_TYPE_VULKAN;
-
-        hardwarePixelFormat =
-            hardwareConfig->pix_fmt;
-
-        REX::TRACE(
-            "Codec {} supports Vulkan hardware decoding.",
-            videoCodec->name
-        );
-    }
-    else
-    {
-        hardwareConfig =
-            findHardwareConfig(
-                videoCodec,
-                AV_HWDEVICE_TYPE_D3D11VA
-            );
-
-        if (hardwareConfig == nullptr)
+        if (openBackend(index))
         {
-            REX::ERROR(
-                "Codec {} supports neither Vulkan nor D3D11VA hardware decoding.",
-                videoCodec->name
-            );
-
-            avcodec_free_context(
-                &codecContext
-            );
-
-            return false;
-        }
-
-        hardwareDeviceType =
-            AV_HWDEVICE_TYPE_D3D11VA;
-
-        hardwarePixelFormat =
-            hardwareConfig->pix_fmt;
-
-        REX::DEBUG(
-            "Codec {} supports D3D11VA hardware decoding.",
-            videoCodec->name
-        );
-    }
-
-
-    if (!ensureHardwareDevice(
-            hardwareDeviceType))
-    {
-        if (
-            hardwareDeviceType !=
-            AV_HWDEVICE_TYPE_VULKAN)
-        {
-            avcodec_free_context(
-                &codecContext
-            );
-
-            return false;
-        }
-
-        REX::ERROR(
-            "Vulkan device unavailable; trying D3D11VA."
-        );
-
-        hardwareConfig =
-            findHardwareConfig(
-                videoCodec,
-                AV_HWDEVICE_TYPE_D3D11VA
-            );
-
-        if (hardwareConfig == nullptr)
-        {
-            avcodec_free_context(
-                &codecContext
-            );
-
-            return false;
-        }
-
-        hardwareDeviceType =
-            AV_HWDEVICE_TYPE_D3D11VA;
-
-        hardwarePixelFormat =
-            hardwareConfig->pix_fmt;
-
-        if (!ensureHardwareDevice(
-                hardwareDeviceType))
-        {
-            avcodec_free_context(
-                &codecContext
-            );
-
-            return false;
-        }
-
-    }
-
-
-    codecContext->opaque =
-        &hardwarePixelFormat;
-
-    codecContext->get_format =
-        getHardwareFormat;
-
-
-    codecContext->hw_device_ctx =
-        av_buffer_ref(
-            hardwareDeviceContext
-        );
-
-    if (codecContext->hw_device_ctx == nullptr)
-    {
-        avcodec_free_context(
-            &codecContext
-        );
-
-        av_buffer_unref(
-            &hardwareDeviceContext
-        );
-
-        return false;
-    }
-            const int openResult =
-                avcodec_open2(
-                    codecContext,
-                    videoCodec,
-                    nullptr
-                );
-
-            if (openResult < 0)
-            {
-                REX::ERROR(
-                    "Failed to open hardware video decoder: {}",
-                    openResult
-                );
-
-                avcodec_free_context(
-                    &codecContext
-                );
-
-                return false;
-            }
-
-            packet =
-                av_packet_alloc();
-
-            if (packet == nullptr)
-            {
-                avcodec_free_context(
-                    &codecContext
-                );
-
-                return false;
-            }
-
-            decoderDraining = false;
-            decoderEOF = false;
-
+            currentTimestamp = -1.0;
             return true;
         }
+    }
+
+    REX::ERROR(
+        "No FFmpeg decoder implementation could open codec {}.",
+        videoCodec->name
+    );
+
+    return false;
+}
 
         decoder::~decoder()
         {
@@ -1867,7 +2405,15 @@ bool decoder::initializeVideoDecoder()
         }
 
         videoCodec = nullptr;
+        activeCodec = nullptr;
         videoStreamIndex = -1;
+
+        backendCount = 0;
+        activeBackendIndex =
+            maxDecoderBackends;
+
+        activeBackend =
+            decoderBackendKind::software;
 
         hardwarePixelFormat =
             AV_PIX_FMT_NONE;
@@ -1875,6 +2421,7 @@ bool decoder::initializeVideoDecoder()
         decoderDraining = false;
         decoderEOF = false;
         currentTimestamp = -1.0;
+        consecutiveDemuxErrors = 0;
     }
 
     void decoder::close()

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 
@@ -32,14 +34,28 @@ namespace f4ffmpeg
         ffmpegError
     };
 
+    // Ordered decode implementations. Vendor-specific backends are attempted
+    // before cross-vendor APIs, and software is always the terminal fallback.
+    enum class decoderBackendKind : std::uint8_t
+    {
+        nvdec,
+        qsv,
+        amf,
+        vulkan,
+        d3d11va,
+        d3d12va,
+        dxva2,
+        software
+    };
+
     struct decodeResult
     {
         decodeStatus status;
         int ffmpegError = 0;
     };
 
-    // Canonical producer output. Regardless of whether FFmpeg decoded with
-    // Vulkan or D3D11VA, a successful frameProduce() returns a Fallout-device
+    // Canonical producer output. Regardless of the selected hardware/software
+    // backend, a successful frameProduce() returns a Fallout-device
     // RGBA texture and its ready-to-bind SRV.
     struct producedFrame
     {
@@ -103,12 +119,15 @@ namespace f4ffmpeg
             producedFrame& output
         );
 
-        bool initializeHardwareDevice(
-            AVHWDeviceType deviceType
+        void buildBackendOrder();
+
+        bool openBackend(
+            std::size_t backendIndex
         );
 
-        bool ensureHardwareDevice(
-            AVHWDeviceType deviceType
+        bool fallbackBackend(
+            int ffmpegError,
+            const char* stage
         );
 
         void closeSource();
@@ -128,6 +147,20 @@ namespace f4ffmpeg
             AV_PIX_FMT_NONE;
 
         const AVCodec* videoCodec = nullptr;
+        const AVCodec* activeCodec = nullptr;
+
+        static constexpr std::size_t maxDecoderBackends = 8;
+
+        std::array<
+            decoderBackendKind,
+            maxDecoderBackends
+        > backendOrder{};
+
+        std::size_t backendCount = 0;
+        std::size_t activeBackendIndex = maxDecoderBackends;
+
+        decoderBackendKind activeBackend =
+            decoderBackendKind::software;
 
         AVPacket* packet = nullptr;
 
@@ -136,6 +169,8 @@ namespace f4ffmpeg
         bool decoderDraining = false;
         bool decoderEOF = false;
         double currentTimestamp = -1.0;
+
+        std::uint32_t consecutiveDemuxErrors = 0;
 
         std::uint64_t handledDecodedFrameDumpGeneration = 0;
         std::uint64_t handledProducedFrameDumpGeneration = 0;

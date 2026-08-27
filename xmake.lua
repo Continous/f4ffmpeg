@@ -3,7 +3,6 @@ set_plat("windows")
 set_arch("x64")
 
 -- include subprojects
-set_config("commonlib_toml", true) -- We're gonna use toml from commonlib.
 includes("lib/commonlibf4")
 
 -- FFMPEG is required, and we want an explicitly vulkan build. We use a custom package for this. Feel free to go through the effort to make this some build flag.
@@ -11,13 +10,19 @@ add_repositories(
     "f4ffmpeg-repo xmake-packages",
     {rootdir = os.projectdir()}
 )
+
+-- Build FFmpeg with NVIDIA's NVDEC/CUDA decode path available. This remains
+-- runtime-optional: systems without an NVIDIA driver/CUDA bridge simply skip
+-- the backend and fall through to the remaining hardware APIs/software.
 add_requires("ffmpeg", {
-    repo = "f4ffmpeg-repo"
+    configs = {
+        nvdec = true
+    }
 })
 
 -- set project constants
 set_project("f4ffmpeg")
-set_version("0.1.0")
+set_version("0.0.1")
 set_license("GPL-3.0")
 set_languages("c++23")
 set_warnings("allextra")
