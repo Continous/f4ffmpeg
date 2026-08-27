@@ -2337,7 +2337,7 @@ namespace f4ffmpeg
                 ))
             {
                 REX::INFO(
-                    "f4ffmpeg target-local workshop-TV {} suppression reached GetRenderPasses.",
+                    "f4ffmpeg target-local workshop-TV {} suppression blocked render-pass construction.",
                     workshopTvEffectKindName(kind)
                 );
             }
@@ -2361,17 +2361,14 @@ namespace f4ffmpeg
                 );
             }
 
-            auto* passes =
-                originalEffectGetRenderPasses(
+            if (shaderProperty == nullptr)
+            {
+                return originalEffectGetRenderPasses(
                     shaderProperty,
                     geometry,
                     renderMode,
                     accumulator
                 );
-
-            if (shaderProperty == nullptr)
-            {
-                return passes;
             }
 
             auto* baseTexture =
@@ -2444,15 +2441,28 @@ namespace f4ffmpeg
                         effectKind
                     );
 
-                    // Bethesda has already built this property's render passes
-                    // for the current draw. Use the engine's own virtual clear
-                    // operation instead of depending on RenderPassArray internals;
-                    // CommonLibF4 intentionally wraps that type.
+                    // Suppress before Bethesda's BSEffectShaderProperty ever
+                    // constructs/submits this draw's render passes. DoClearRenderPasses
+                    // resets the property's engine-owned list; returning that same
+                    // empty list keeps the caller on its normal non-null object path.
                     shaderProperty->DoClearRenderPasses();
 
-                    return passes;
+                    return std::addressof(
+                        shaderProperty->renderPassList
+                    );
                 }
             }
+
+            // Only unsuppressed effects reach Bethesda's pass builder. Clearing a
+            // populated list after this call is too late on paths that have already
+            // copied/submitted the generated BSRenderPass objects to the accumulator.
+            auto* passes =
+                originalEffectGetRenderPasses(
+                    shaderProperty,
+                    geometry,
+                    renderMode,
+                    accumulator
+                );
 
             if (
                 textureName == nullptr ||
