@@ -2,6 +2,8 @@
 set_plat("windows")
 set_arch("x64")
 
+set_config("commonlib_toml", true)
+
 -- include subprojects
 includes("lib/commonlibf4")
 
