@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <memory>
 #include <limits>
 #include <mutex>
@@ -23,6 +24,8 @@
 #include <vector>
 
 #include <RE/B/BSGraphics.h>
+#include <RE/B/BSGeometry.h>
+#include <RE/B/BSShaderProperty.h>
 #include <RE/B/BSShaderTextureSet.h>
 #include <RE/B/BSTextureSet.h>
 #include <RE/N/NiPointer.h>
@@ -48,15 +51,18 @@ namespace f4ffmpeg
         constexpr std::string_view ddsSuffix =
             ".dds";
 
-        constexpr std::string_view workshopTvStaticTexture =
+        constexpr std::string_view workshopTvRasterScanTexture =
             "textures\\effects\\tvanim\\rasterscananim_d.dds";
 
+        // Keep .mov first for backward-compatible collision precedence.
+        // The decoder itself is FFmpeg-backed; nifHandler only needs to avoid
+        // treating unrelated Data\\Video sidecars/config files as video inputs.
         constexpr std::array<std::string_view, 12>
             supportedVideoExtensions{
-                ".mkv",
                 ".mov",
                 ".mp4",
                 ".m4v",
+                ".mkv",
                 ".webm",
                 ".avi",
                 ".wmv",
@@ -154,7 +160,9 @@ namespace f4ffmpeg
                         extension,
                         supportedVideoExtensions[index]))
                 {
-                    // Earlier entries have higher precedence.
+                    // Earlier entries have higher precedence. This makes .mov
+                    // win stem collisions, preserving the behavior of releases
+                    // that only recognized .mov.
                     return static_cast<int>(
                         supportedVideoExtensions.size() - index
                     );
@@ -594,14 +602,14 @@ namespace f4ffmpeg
             return settings;
         }
 
-        bool isWorkshopTvStaticTexture(
+        bool isWorkshopTvRasterScanTexture(
             std::string_view texturePath)
         {
             return lowercasePath(
                        canonicalTextureLookupPath(
                            texturePath
                        )
-                   ) == workshopTvStaticTexture;
+                   ) == workshopTvRasterScanTexture;
         }
 
         const char* modeName(
@@ -1245,10 +1253,22 @@ namespace f4ffmpeg
             REX::W32::ID3D11ShaderResourceView*>
             suppressedVanillaSrvs;
 
+        bool workshopTvRasterScanSuppressionEnabled =
+            false;
+
         bool workshopTvStaticSuppressionEnabled =
             false;
 
-        std::atomic_bool staticSuppressionObserved =
+        bool workshopTvWarpSuppressionEnabled =
+            false;
+
+        std::atomic_bool rasterScanSuppressionObserved =
+            false;
+
+        std::atomic_bool staticEffectSuppressionObserved =
+            false;
+
+        std::atomic_bool warpEffectSuppressionObserved =
             false;
 
         std::atomic_bool hasPresentationBindings =
@@ -1312,35 +1332,11 @@ namespace f4ffmpeg
             );
         }
 
-        bool registerNiTexturePresentationBinding(
+        REX::W32::ID3D11ShaderResourceView*
+        getNiTextureSrv(
             const char* texturePath,
-            RE::NiTexture* niTexture,
-            const char* sourceName)
+            RE::NiTexture* niTexture)
         {
-            const bool suppressStatic =
-                workshopTvStaticSuppressionEnabled &&
-                texturePath != nullptr &&
-                *texturePath != '\0' &&
-                isWorkshopTvStaticTexture(
-                    texturePath
-                );
-
-            std::shared_ptr<const videoTarget>
-                target;
-
-            if (!suppressStatic)
-            {
-                target =
-                    getVideoTargetForTexture(
-                        texturePath
-                    );
-            }
-
-            // A stable NiTexture with neither an indexed video target nor the
-            // configured workshop-TV static suppression needs no further work.
-            if (!target && !suppressStatic)
-                return true;
-
             if (niTexture == nullptr)
             {
                 logBindingFailureOnce(
@@ -1348,7 +1344,7 @@ namespace f4ffmpeg
                     "NiTexture pointer is null"
                 );
 
-                return false;
+                return nullptr;
             }
 
             if (niTexture->rendererTexture == nullptr)
@@ -1358,7 +1354,7 @@ namespace f4ffmpeg
                     "NiTexture has no rendererTexture yet"
                 );
 
-                return false;
+                return nullptr;
             }
 
             const auto* rendererTexture =
@@ -1367,18 +1363,41 @@ namespace f4ffmpeg
                         niTexture->rendererTexture
                     );
 
-            auto* vanillaSrv =
+            auto* srv =
                 rendererTexture->resourceView;
 
-            if (vanillaSrv == nullptr)
+            if (srv == nullptr)
             {
                 logBindingFailureOnce(
                     texturePath,
                     "rendererTexture has no shader resource view"
                 );
-
-                return false;
             }
+
+            return srv;
+        }
+
+        bool registerNiTexturePresentationBinding(
+            const char* texturePath,
+            RE::NiTexture* niTexture,
+            const char* sourceName)
+        {
+            auto target =
+                getVideoTargetForTexture(
+                    texturePath
+                );
+
+            if (!target)
+                return true;
+
+            auto* vanillaSrv =
+                getNiTextureSrv(
+                    texturePath,
+                    niTexture
+                );
+
+            if (vanillaSrv == nullptr)
+                return false;
 
             bool changed = false;
 
@@ -1387,40 +1406,30 @@ namespace f4ffmpeg
                     bindingMutex
                 );
 
-                if (suppressStatic)
+                const auto existing =
+                    targetsByVanillaSrv.find(
+                        vanillaSrv
+                    );
+
+                if (existing == targetsByVanillaSrv.end())
                 {
-                    changed =
-                        suppressedVanillaSrvs.emplace(
-                            vanillaSrv
-                        ).second;
+                    targetsByVanillaSrv.emplace(
+                        vanillaSrv,
+                        target
+                    );
+
+                    changed = true;
                 }
-                else
+                else if (
+                    existing->second->getVideoPath() !=
+                        target->getVideoPath() &&
+                    modePriority(target->getMode()) >
+                        modePriority(existing->second->getMode()))
                 {
-                    const auto existing =
-                        targetsByVanillaSrv.find(
-                            vanillaSrv
-                        );
+                    existing->second =
+                        target;
 
-                    if (existing == targetsByVanillaSrv.end())
-                    {
-                        targetsByVanillaSrv.emplace(
-                            vanillaSrv,
-                            target
-                        );
-
-                        changed = true;
-                    }
-                    else if (
-                        existing->second->getVideoPath() !=
-                            target->getVideoPath() &&
-                        modePriority(target->getMode()) >
-                            modePriority(existing->second->getMode()))
-                    {
-                        existing->second =
-                            target;
-
-                        changed = true;
-                    }
+                    changed = true;
                 }
             }
 
@@ -1459,26 +1468,61 @@ namespace f4ffmpeg
                 }
             }
 
-            if (suppressStatic)
-            {
-                REX::INFO(
-                    "Bound f4ffmpeg workshop-TV static suppression '{}' via {}.",
-                    canonicalTextureLookupPath(
-                        texturePath
-                    ),
-                    sourceName
-                        ? sourceName
-                        : "unknown"
-                );
-
-                return true;
-            }
-
             REX::INFO(
                 "Bound f4ffmpeg {} presentation '{}' -> '{}' via {}.",
                 modeName(target->getMode()),
                 target->getTexturePath(),
                 target->getVideoPath(),
+                sourceName
+                    ? sourceName
+                    : "unknown"
+            );
+
+            return true;
+        }
+
+        bool registerNiTextureSuppressionBinding(
+            const char* texturePath,
+            RE::NiTexture* niTexture,
+            const char* sourceName)
+        {
+            auto* vanillaSrv =
+                getNiTextureSrv(
+                    texturePath,
+                    niTexture
+                );
+
+            if (vanillaSrv == nullptr)
+                return false;
+
+            bool changed = false;
+
+            {
+                std::unique_lock lock(
+                    bindingMutex
+                );
+
+                changed =
+                    suppressedVanillaSrvs.emplace(
+                        vanillaSrv
+                    ).second;
+            }
+
+            if (!changed)
+                return true;
+
+            hasPresentationBindings.store(
+                true,
+                std::memory_order_release
+            );
+
+            REX::INFO(
+                "Bound target-local f4ffmpeg TV raster-scan suppression '{}' via {}.",
+                canonicalTextureLookupPath(
+                    texturePath
+                        ? texturePath
+                        : ""
+                ),
                 sourceName
                     ? sourceName
                     : "unknown"
@@ -1979,33 +2023,327 @@ namespace f4ffmpeg
         std::atomic_bool effectRenderPassHookObserved =
             false;
 
-        std::shared_mutex settledEffectTexturesMutex;
-
-        std::unordered_set<RE::NiTexture*>
-            settledEffectTextures;
-
-        bool effectTextureAlreadySettled(
-            RE::NiTexture* texture)
+        enum class workshopTvEffectKind : std::uint8_t
         {
-            std::shared_lock lock(
-                settledEffectTexturesMutex
-            );
+            other,
+            rasterScan,
+            staticFuzz,
+            screenWarp
+        };
 
-            return settledEffectTextures.find(
-                texture
-            ) != settledEffectTextures.end();
+        std::shared_mutex touchedTvNodesMutex;
+
+        // BSShaderProperty::fadeNode is instance-local render ownership. Using
+        // it as the association key means the effect options apply only to the
+        // particular TV/NIF instance whose screen texture f4ffmpeg is replacing.
+        std::unordered_set<const void*>
+            touchedTvNodes;
+
+        std::mutex tvEffectDiagnosticMutex;
+        std::unordered_set<std::string>
+            tvEffectDiagnostics;
+
+        RE::BSShaderProperty::RenderPassArray
+            emptyEffectRenderPasses{nullptr};
+
+        const void* getEffectOwnerKey(
+            const RE::BSShaderProperty* shaderProperty)
+        {
+            if (
+                shaderProperty == nullptr ||
+                shaderProperty->fadeNode == nullptr)
+            {
+                return nullptr;
+            }
+
+            return static_cast<const void*>(
+                shaderProperty->fadeNode
+            );
         }
 
-        void markEffectTextureSettled(
-            RE::NiTexture* texture)
+        void markTvNodeTouched(
+            const RE::BSShaderProperty* shaderProperty)
         {
+            const void* owner =
+                getEffectOwnerKey(
+                    shaderProperty
+                );
+
+            if (owner == nullptr)
+                return;
+
             std::unique_lock lock(
-                settledEffectTexturesMutex
+                touchedTvNodesMutex
             );
 
-            settledEffectTextures.emplace(
-                texture
+            touchedTvNodes.emplace(
+                owner
             );
+        }
+
+        bool isTvNodeTouched(
+            const RE::BSShaderProperty* shaderProperty)
+        {
+            const void* owner =
+                getEffectOwnerKey(
+                    shaderProperty
+                );
+
+            if (owner == nullptr)
+                return false;
+
+            std::shared_lock lock(
+                touchedTvNodesMutex
+            );
+
+            return touchedTvNodes.find(
+                       owner
+                   ) != touchedTvNodes.end();
+        }
+
+        void appendEffectSignaturePart(
+            std::string& signature,
+            const char* value)
+        {
+            if (
+                value == nullptr ||
+                *value == '\0')
+            {
+                return;
+            }
+
+            if (!signature.empty())
+                signature += '|';
+
+            signature +=
+                lowercasePath(
+                    value
+                );
+        }
+
+        std::string buildEffectSignature(
+            const RE::BSShaderProperty* shaderProperty,
+            const RE::BSGeometry* geometry,
+            const RE::NiTexture* baseTexture)
+        {
+            std::string signature;
+
+            if (geometry != nullptr)
+            {
+                appendEffectSignaturePart(
+                    signature,
+                    geometry->name.c_str()
+                );
+            }
+
+            if (shaderProperty != nullptr)
+            {
+                appendEffectSignaturePart(
+                    signature,
+                    shaderProperty->name.c_str()
+                );
+            }
+
+            if (baseTexture != nullptr)
+            {
+                appendEffectSignaturePart(
+                    signature,
+                    baseTexture->name.c_str()
+                );
+            }
+
+            return signature;
+        }
+
+        bool signatureContainsAny(
+            std::string_view signature,
+            std::initializer_list<std::string_view> tokens)
+        {
+            for (const auto token : tokens)
+            {
+                if (
+                    signature.find(token) !=
+                        std::string_view::npos)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        workshopTvEffectKind classifyWorkshopTvEffect(
+            const RE::BSShaderProperty* shaderProperty,
+            const RE::BSGeometry* geometry,
+            const RE::NiTexture* baseTexture)
+        {
+            if (
+                baseTexture != nullptr &&
+                isWorkshopTvRasterScanTexture(
+                    baseTexture->name.c_str()
+                ))
+            {
+                return workshopTvEffectKind::rasterScan;
+            }
+
+            const std::string signature =
+                buildEffectSignature(
+                    shaderProperty,
+                    geometry,
+                    baseTexture
+                );
+
+            // Bethesda's TV is authored as separate NIF effect geometries for
+            // distortion/warp and animated noise/static. Prefer semantic NIF /
+            // material names over generic texture paths so shared utility
+            // textures (notably ColorBlackUtility.dds) are never globally killed.
+            if (signatureContainsAny(
+                    signature,
+                    {
+                        "warp",
+                        "distort",
+                        "distortion",
+                        "wobble"
+                    }))
+            {
+                return workshopTvEffectKind::screenWarp;
+            }
+
+            if (signatureContainsAny(
+                    signature,
+                    {
+                        "static",
+                        "fuzz",
+                        "noise",
+                        "interference"
+                    }))
+            {
+                return workshopTvEffectKind::staticFuzz;
+            }
+
+            return workshopTvEffectKind::other;
+        }
+
+        const char* workshopTvEffectKindName(
+            workshopTvEffectKind kind)
+        {
+            switch (kind)
+            {
+                case workshopTvEffectKind::rasterScan:
+                    return "raster scan";
+
+                case workshopTvEffectKind::staticFuzz:
+                    return "static/fuzz";
+
+                case workshopTvEffectKind::screenWarp:
+                    return "screen warp";
+
+                case workshopTvEffectKind::other:
+                default:
+                    return "unclassified";
+            }
+        }
+
+        void diagnoseTouchedTvEffect(
+            const RE::BSShaderProperty* shaderProperty,
+            const RE::BSGeometry* geometry,
+            const RE::NiTexture* baseTexture,
+            workshopTvEffectKind kind)
+        {
+            const std::string geometryName =
+                geometry != nullptr &&
+                geometry->name.c_str() != nullptr
+                    ? geometry->name.c_str()
+                    : "<unnamed>";
+
+            const std::string propertyName =
+                shaderProperty != nullptr &&
+                shaderProperty->name.c_str() != nullptr
+                    ? shaderProperty->name.c_str()
+                    : "<unnamed>";
+
+            const std::string textureName =
+                baseTexture != nullptr &&
+                baseTexture->name.c_str() != nullptr
+                    ? baseTexture->name.c_str()
+                    : "<none>";
+
+            std::string key =
+                lowercasePath(
+                    geometryName + "|" +
+                    propertyName + "|" +
+                    textureName
+                );
+
+            {
+                std::scoped_lock lock(
+                    tvEffectDiagnosticMutex
+                );
+
+                if (!tvEffectDiagnostics.emplace(
+                        std::move(key)
+                    ).second)
+                {
+                    return;
+                }
+            }
+
+            REX::INFO(
+                "f4ffmpeg touched-TV effect: kind={}, geometry='{}', shader='{}', baseTexture='{}'.",
+                workshopTvEffectKindName(kind),
+                geometryName,
+                propertyName,
+                textureName
+            );
+        }
+
+        bool shouldSuppressWorkshopTvEffect(
+            workshopTvEffectKind kind)
+        {
+            switch (kind)
+            {
+                case workshopTvEffectKind::staticFuzz:
+                    return workshopTvStaticSuppressionEnabled;
+
+                case workshopTvEffectKind::screenWarp:
+                    return workshopTvWarpSuppressionEnabled;
+
+                default:
+                    return false;
+            }
+        }
+
+        void reportWorkshopTvEffectSuppression(
+            workshopTvEffectKind kind)
+        {
+            std::atomic_bool* observed = nullptr;
+
+            switch (kind)
+            {
+                case workshopTvEffectKind::staticFuzz:
+                    observed =
+                        &staticEffectSuppressionObserved;
+                    break;
+
+                case workshopTvEffectKind::screenWarp:
+                    observed =
+                        &warpEffectSuppressionObserved;
+                    break;
+
+                default:
+                    return;
+            }
+
+            if (!observed->exchange(
+                    true,
+                    std::memory_order_acq_rel
+                ))
+            {
+                REX::INFO(
+                    "f4ffmpeg target-local workshop-TV {} suppression reached GetRenderPasses.",
+                    workshopTvEffectKindName(kind)
+                );
+            }
         }
 
         RE::BSShaderProperty::RenderPassArray*
@@ -2015,14 +2353,6 @@ namespace f4ffmpeg
             std::uint32_t renderMode,
             RE::BSShaderAccumulator* accumulator)
         {
-            auto* passes =
-                originalEffectGetRenderPasses(
-                    shaderProperty,
-                    geometry,
-                    renderMode,
-                    accumulator
-                );
-
             if (!effectRenderPassHookObserved.exchange(
                     true,
                     std::memory_order_acq_rel
@@ -2035,34 +2365,104 @@ namespace f4ffmpeg
             }
 
             if (shaderProperty == nullptr)
-                return passes;
+            {
+                return originalEffectGetRenderPasses(
+                    shaderProperty,
+                    geometry,
+                    renderMode,
+                    accumulator
+                );
+            }
 
             auto* baseTexture =
                 originalEffectGetBaseTexture(
                     shaderProperty
                 );
 
-            if (baseTexture == nullptr)
-                return passes;
+            const char* textureName =
+                baseTexture != nullptr
+                    ? baseTexture->name.c_str()
+                    : nullptr;
 
-            if (effectTextureAlreadySettled(
-                    baseTexture
-                ))
+            std::shared_ptr<const videoTarget>
+                target;
+
+            if (
+                textureName != nullptr &&
+                *textureName != '\0')
             {
-                return passes;
+                target =
+                    getVideoTargetForTexture(
+                        textureName
+                    );
+
+                if (target)
+                {
+                    // This particular fade-node/NIF instance is now proven to
+                    // contain a texture f4ffmpeg handles. Sibling TV effects can
+                    // be changed without affecting unrelated vanilla TVs.
+                    markTvNodeTouched(
+                        shaderProperty
+                    );
+                }
             }
 
-            const char* textureName =
-                baseTexture->name.c_str();
+            const bool touched =
+                isTvNodeTouched(
+                    shaderProperty
+                );
+
+            workshopTvEffectKind effectKind =
+                workshopTvEffectKind::other;
+
+            if (touched)
+            {
+                effectKind =
+                    classifyWorkshopTvEffect(
+                        shaderProperty,
+                        geometry,
+                        baseTexture
+                    );
+
+                diagnoseTouchedTvEffect(
+                    shaderProperty,
+                    geometry,
+                    baseTexture,
+                    effectKind
+                );
+
+                // Never classify the actual handled screen texture as an effect
+                // to remove, even if a mod gives its geometry/material a name
+                // containing one of our diagnostic tokens.
+                if (
+                    !target &&
+                    shouldSuppressWorkshopTvEffect(
+                        effectKind
+                    ))
+                {
+                    reportWorkshopTvEffectSuppression(
+                        effectKind
+                    );
+
+                    // Return a stable empty render-pass list instead of mutating
+                    // the shared shader property or NIF. Suppression is therefore
+                    // draw-local and instance-scoped.
+                    return &emptyEffectRenderPasses;
+                }
+            }
+
+            auto* passes =
+                originalEffectGetRenderPasses(
+                    shaderProperty,
+                    geometry,
+                    renderMode,
+                    accumulator
+                );
 
             if (
                 textureName == nullptr ||
                 *textureName == '\0')
             {
-                markEffectTextureSettled(
-                    baseTexture
-                );
-
                 return passes;
             }
 
@@ -2071,18 +2471,23 @@ namespace f4ffmpeg
                 textureName
             );
 
-            // A false result means this *is* an indexed texture but Bethesda has
-            // not attached its renderer texture/SRV yet. Leave it unsettled so a
-            // later render-pass request retries instead of permanently falling
-            // back to vanilla.
-            if (registerNiTexturePresentationBinding(
+            if (target)
+            {
+                registerNiTexturePresentationBinding(
                     textureName,
                     baseTexture,
                     "BSEffectShaderProperty::GetRenderPasses"
-                ))
+                );
+            }
+            else if (
+                touched &&
+                workshopTvRasterScanSuppressionEnabled &&
+                effectKind == workshopTvEffectKind::rasterScan)
             {
-                markEffectTextureSettled(
-                    baseTexture
+                registerNiTextureSuppressionBinding(
+                    textureName,
+                    baseTexture,
+                    "BSEffectShaderProperty::GetRenderPasses"
                 );
             }
 
@@ -2325,20 +2730,20 @@ namespace f4ffmpeg
                 if (suppress)
                 {
                     // A null D3D11 SRV is a legal unbound resource. Shader reads
-                    // return zero, which removes the raster/static effect without
-                    // creating or uploading an otherwise pointless replacement.
+                    // return zero, removing the target-local RasterScan texture
+                    // without manufacturing a replacement resource.
                     replacementViews[index] =
                         nullptr;
 
                     replacedAny = true;
 
-                    if (!staticSuppressionObserved.exchange(
+                    if (!rasterScanSuppressionObserved.exchange(
                             true,
                             std::memory_order_acq_rel
                         ))
                     {
                         REX::INFO(
-                            "f4ffmpeg workshop-TV static suppression reached D3D11 presentation."
+                            "f4ffmpeg target-local workshop-TV raster-scan suppression reached D3D11 presentation."
                         );
                     }
 
@@ -2917,14 +3322,26 @@ namespace f4ffmpeg
                     "Initializing f4ffmpeg texture replacement."
                 );
 
+                workshopTvRasterScanSuppressionEnabled =
+                    config::disableWorkshopTVRasterScan.GetValue();
+
                 workshopTvStaticSuppressionEnabled =
                     config::disableWorkshopTVStatic.GetValue();
 
+                workshopTvWarpSuppressionEnabled =
+                    config::disableWorkshopTVWarp.GetValue();
+
                 REX::INFO(
-                    "f4ffmpeg workshop-TV static suppression is {}.",
+                    "f4ffmpeg target-local workshop-TV effects: raster scan={}, static/fuzz={}, warp={}.",
+                    workshopTvRasterScanSuppressionEnabled
+                        ? "disabled"
+                        : "preserved",
                     workshopTvStaticSuppressionEnabled
-                        ? "enabled"
-                        : "disabled"
+                        ? "disabled"
+                        : "preserved",
+                    workshopTvWarpSuppressionEnabled
+                        ? "disabled"
+                        : "preserved"
                 );
 
                 if (!buildReplacementIndex())

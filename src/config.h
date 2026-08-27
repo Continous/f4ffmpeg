@@ -22,11 +22,24 @@ namespace f4ffmpeg::config
         0.250
     };
 
-    // Removes Fallout's RasterScanAnim_d.dds overlay from workshop TVs by
-    // suppressing that texture's SRV at the existing D3D11 presentation hook.
+    // Workshop-TV presentation effects. nifHandler scopes these to scene
+    // instances whose screen texture is actually handled by f4ffmpeg; vanilla
+    // TVs that are not video targets are left untouched.
+    inline REX::TTomlSetting<bool> disableWorkshopTVRasterScan{
+        "Textures",
+        "DisableWorkshopTVRasterScan",
+        false
+    };
+
     inline REX::TTomlSetting<bool> disableWorkshopTVStatic{
         "Textures",
         "DisableWorkshopTVStatic",
+        false
+    };
+
+    inline REX::TTomlSetting<bool> disableWorkshopTVWarp{
+        "Textures",
+        "DisableWorkshopTVWarp",
         false
     };
 
