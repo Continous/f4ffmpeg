@@ -1265,12 +1265,6 @@ namespace f4ffmpeg
         std::atomic_bool rasterScanSuppressionObserved =
             false;
 
-        std::atomic_bool staticEffectSuppressionObserved =
-            false;
-
-        std::atomic_bool warpEffectSuppressionObserved =
-            false;
-
         std::atomic_bool hasPresentationBindings =
             false;
 
@@ -2023,6 +2017,9 @@ namespace f4ffmpeg
         std::atomic_bool effectRenderPassHookObserved =
             false;
 
+        std::atomic_bool effectBaseTextureHookObserved =
+            false;
+
         enum class workshopTvEffectKind : std::uint8_t
         {
             other,
@@ -2038,6 +2035,15 @@ namespace f4ffmpeg
         // particular TV/NIF instance whose screen texture f4ffmpeg is replacing.
         std::unordered_set<const void*>
             touchedTvNodes;
+
+        // Once a touched-TV effect property has been classified and its matching
+        // config option is enabled, GetBaseTexture returns nullptr for this exact
+        // property. Keep this property-local instead of blacklisting the texture's
+        // SRV globally; shared utility textures can then continue rendering on
+        // untouched TVs and unrelated NIFs.
+        std::shared_mutex nulledTvEffectPropertiesMutex;
+        std::unordered_set<const RE::BSShaderProperty*>
+            nulledTvEffectProperties;
 
         std::mutex tvEffectDiagnosticMutex;
         std::unordered_set<std::string>
@@ -2299,6 +2305,9 @@ namespace f4ffmpeg
         {
             switch (kind)
             {
+                case workshopTvEffectKind::rasterScan:
+                    return workshopTvRasterScanSuppressionEnabled;
+
                 case workshopTvEffectKind::staticFuzz:
                     return workshopTvStaticSuppressionEnabled;
 
@@ -2310,37 +2319,84 @@ namespace f4ffmpeg
             }
         }
 
-        void reportWorkshopTvEffectSuppression(
+        bool markWorkshopTvEffectTextureNull(
+            const RE::BSShaderProperty* shaderProperty,
             workshopTvEffectKind kind)
         {
-            std::atomic_bool* observed = nullptr;
-
-            switch (kind)
+            if (
+                shaderProperty == nullptr ||
+                !shouldSuppressWorkshopTvEffect(kind))
             {
-                case workshopTvEffectKind::staticFuzz:
-                    observed =
-                        &staticEffectSuppressionObserved;
-                    break;
-
-                case workshopTvEffectKind::screenWarp:
-                    observed =
-                        &warpEffectSuppressionObserved;
-                    break;
-
-                default:
-                    return;
+                return false;
             }
 
-            if (!observed->exchange(
+            bool changed = false;
+
+            {
+                std::unique_lock lock(
+                    nulledTvEffectPropertiesMutex
+                );
+
+                changed =
+                    nulledTvEffectProperties.emplace(
+                        shaderProperty
+                    ).second;
+            }
+
+            if (changed)
+            {
+                REX::INFO(
+                    "f4ffmpeg target-local workshop-TV {} property={} will return a null base texture.",
+                    workshopTvEffectKindName(kind),
+                    static_cast<const void*>(shaderProperty)
+                );
+            }
+
+            return true;
+        }
+
+        bool isWorkshopTvEffectTextureNulled(
+            const RE::BSShaderProperty* shaderProperty)
+        {
+            if (shaderProperty == nullptr)
+                return false;
+
+            std::shared_lock lock(
+                nulledTvEffectPropertiesMutex
+            );
+
+            return nulledTvEffectProperties.find(
+                       shaderProperty
+                   ) != nulledTvEffectProperties.end();
+        }
+
+        RE::NiTexture* effectGetBaseTextureHook(
+            const RE::BSShaderProperty* shaderProperty)
+        {
+            if (!effectBaseTextureHookObserved.exchange(
                     true,
                     std::memory_order_acq_rel
                 ))
             {
                 REX::INFO(
-                    "f4ffmpeg target-local workshop-TV {} suppression blocked render-pass construction.",
-                    workshopTvEffectKindName(kind)
+                    "f4ffmpeg BSEffectShaderProperty::GetBaseTexture hook reached."
                 );
             }
+
+            auto* baseTexture =
+                originalEffectGetBaseTexture(
+                    shaderProperty
+                );
+
+            if (
+                shaderProperty != nullptr &&
+                isTvNodeTouched(shaderProperty) &&
+                isWorkshopTvEffectTextureNulled(shaderProperty))
+            {
+                return nullptr;
+            }
+
+            return baseTexture;
         }
 
         RE::BSShaderProperty::RenderPassArray*
@@ -2430,32 +2486,23 @@ namespace f4ffmpeg
 
                 // Never classify the actual handled screen texture as an effect
                 // to remove, even if a mod gives its geometry/material a name
-                // containing one of our diagnostic tokens.
+                // containing one of our diagnostic tokens. For sibling TV effects,
+                // null the property's base texture instead of trying to suppress or
+                // mutate its render-pass list. Bethesda can build the normal pass,
+                // but any virtual GetBaseTexture lookup for this property sees null.
                 if (
                     !target &&
                     shouldSuppressWorkshopTvEffect(
                         effectKind
                     ))
                 {
-                    reportWorkshopTvEffectSuppression(
+                    markWorkshopTvEffectTextureNull(
+                        shaderProperty,
                         effectKind
-                    );
-
-                    // Suppress before Bethesda's BSEffectShaderProperty ever
-                    // constructs/submits this draw's render passes. DoClearRenderPasses
-                    // resets the property's engine-owned list; returning that same
-                    // empty list keeps the caller on its normal non-null object path.
-                    shaderProperty->DoClearRenderPasses();
-
-                    return std::addressof(
-                        shaderProperty->renderPassList
                     );
                 }
             }
 
-            // Only unsuppressed effects reach Bethesda's pass builder. Clearing a
-            // populated list after this call is too late on paths that have already
-            // copied/submitted the generated BSRenderPass objects to the accumulator.
             auto* passes =
                 originalEffectGetRenderPasses(
                     shaderProperty,
@@ -2547,9 +2594,14 @@ namespace f4ffmpeg
             originalEffectGetBaseTexture =
                 baseTextureOriginal;
 
-            const auto replacement =
+            const auto renderPassesReplacement =
                 reinterpret_cast<std::uintptr_t>(
                     &effectGetRenderPassesHook
+                );
+
+            const auto baseTextureReplacement =
+                reinterpret_cast<std::uintptr_t>(
+                    &effectGetBaseTextureHook
                 );
 
             REX::INFO(
@@ -2572,15 +2624,25 @@ namespace f4ffmpeg
 
             effectVtable.write_vfunc(
                 effectGetRenderPassesVtableIndex,
-                replacement
+                renderPassesReplacement
             );
 
-            const auto patched =
+            effectVtable.write_vfunc(
+                effectGetBaseTextureVtableIndex,
+                baseTextureReplacement
+            );
+
+            const auto patchedRenderPasses =
                 readUnaligned<std::uintptr_t>(
                     getRenderPassesSlot
                 );
 
-            if (patched != replacement)
+            const auto patchedBaseTexture =
+                readUnaligned<std::uintptr_t>(
+                    getBaseTextureSlot
+                );
+
+            if (patchedRenderPasses != renderPassesReplacement)
             {
                 REX::ERROR(
                     "Failed to patch BSEffectShaderProperty::GetRenderPasses."
@@ -2589,11 +2651,23 @@ namespace f4ffmpeg
                 return false;
             }
 
+            if (patchedBaseTexture != baseTextureReplacement)
+            {
+                REX::ERROR(
+                    "Failed to patch BSEffectShaderProperty::GetBaseTexture."
+                );
+
+                return false;
+            }
+
             REX::INFO(
                 "f4ffmpeg patched BSEffectShaderProperty "
-                "GetRenderPasses slot 2B={}.",
+                "GetRenderPasses slot 2B={} and GetBaseTexture slot 39={}.",
                 reinterpret_cast<void*>(
-                    patched
+                    patchedRenderPasses
+                ),
+                reinterpret_cast<void*>(
+                    patchedBaseTexture
                 )
             );
 
