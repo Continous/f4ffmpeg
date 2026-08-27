@@ -2444,14 +2444,11 @@ namespace f4ffmpeg
                         effectKind
                     );
 
-                    // Bethesda has already produced this property's real
-                    // render-pass array for the current draw. Empty that array
-                    // in-place rather than fabricating a RenderPassArray object;
-                    // the next GetRenderPasses call may repopulate it normally.
-                    if (passes != nullptr)
-                    {
-                        passes->head = nullptr;
-                    }
+                    // Bethesda has already built this property's render passes
+                    // for the current draw. Use the engine's own virtual clear
+                    // operation instead of depending on RenderPassArray internals;
+                    // CommonLibF4 intentionally wraps that type.
+                    shaderProperty->DoClearRenderPasses();
 
                     return passes;
                 }
