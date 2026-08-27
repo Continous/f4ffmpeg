@@ -274,6 +274,38 @@ package("ffmpeg")
         if package:is_plat("windows") then
             import("package.tools.autoconf")
             local envs = autoconf.buildenvs(package, {packagedeps = "libiconv"})
+
+            -- autoconf.buildenvs() populates PKG_CONFIG_PATH from library
+            -- dependencies. nv-codec-headers is header/pkg-config-only, so its
+            -- ffnvcodec.pc directory must be exposed explicitly to FFmpeg's
+            -- configure script when NVDEC/NVENC is enabled.
+            if package:config("nvdec") or package:config("nvenc") then
+                local nvcodec = package:dep("nv-codec-headers")
+                assert(nvcodec, "nv-codec-headers dependency is required for NVDEC/NVENC")
+
+                local pkgconfig_dirs = {
+                    nvcodec:installdir("lib", "pkgconfig"),
+                    nvcodec:installdir("share", "pkgconfig")
+                }
+                local ffnvcodec_dir
+
+                for _, pkgconfig_dir in ipairs(pkgconfig_dirs) do
+                    if os.isfile(path.join(pkgconfig_dir, "ffnvcodec.pc")) then
+                        ffnvcodec_dir = path.cygwin(pkgconfig_dir)
+                        break
+                    end
+                end
+
+                assert(ffnvcodec_dir,
+                    "nv-codec-headers was installed, but ffnvcodec.pc could not be found")
+
+                if envs.PKG_CONFIG_PATH and #envs.PKG_CONFIG_PATH > 0 then
+                    envs.PKG_CONFIG_PATH = envs.PKG_CONFIG_PATH .. ":" .. ffnvcodec_dir
+                else
+                    envs.PKG_CONFIG_PATH = ffnvcodec_dir
+                end
+            end
+
             if not envs.PATH then -- Fix in xmake 2.9.8
                 local msvc = package:toolchain("msvc") or toolchain.load("msvc", {plat = package:plat(), arch = package:arch()})
                 envs.PATH = os.getenv("PATH") -- we need to reserve PATH on msys2
