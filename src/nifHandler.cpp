@@ -2043,9 +2043,6 @@ namespace f4ffmpeg
         std::unordered_set<std::string>
             tvEffectDiagnostics;
 
-        RE::BSShaderProperty::RenderPassArray
-            emptyEffectRenderPasses{nullptr};
-
         const void* getEffectOwnerKey(
             const RE::BSShaderProperty* shaderProperty)
         {
@@ -2364,14 +2361,17 @@ namespace f4ffmpeg
                 );
             }
 
-            if (shaderProperty == nullptr)
-            {
-                return originalEffectGetRenderPasses(
+            auto* passes =
+                originalEffectGetRenderPasses(
                     shaderProperty,
                     geometry,
                     renderMode,
                     accumulator
                 );
+
+            if (shaderProperty == nullptr)
+            {
+                return passes;
             }
 
             auto* baseTexture =
@@ -2444,20 +2444,18 @@ namespace f4ffmpeg
                         effectKind
                     );
 
-                    // Return a stable empty render-pass list instead of mutating
-                    // the shared shader property or NIF. Suppression is therefore
-                    // draw-local and instance-scoped.
-                    return &emptyEffectRenderPasses;
+                    // Bethesda has already produced this property's real
+                    // render-pass array for the current draw. Empty that array
+                    // in-place rather than fabricating a RenderPassArray object;
+                    // the next GetRenderPasses call may repopulate it normally.
+                    if (passes != nullptr)
+                    {
+                        passes->head = nullptr;
+                    }
+
+                    return passes;
                 }
             }
-
-            auto* passes =
-                originalEffectGetRenderPasses(
-                    shaderProperty,
-                    geometry,
-                    renderMode,
-                    accumulator
-                );
 
             if (
                 textureName == nullptr ||
