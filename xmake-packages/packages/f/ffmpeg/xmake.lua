@@ -275,34 +275,41 @@ package("ffmpeg")
             import("package.tools.autoconf")
             local envs = autoconf.buildenvs(package, {packagedeps = "libiconv"})
 
-            -- autoconf.buildenvs() populates PKG_CONFIG_PATH from library
-            -- dependencies. nv-codec-headers is header/pkg-config-only, so its
-            -- ffnvcodec.pc directory must be exposed explicitly to FFmpeg's
-            -- configure script when NVDEC/NVENC is enabled.
+            -- FFmpeg discovers ffnvcodec through pkg-config.  The Xmake
+            -- nv-codec-headers package is header-only on some Windows builds
+            -- and may not install upstream's ffnvcodec.pc, so create an
+            -- equivalent metadata file from the dependency's real prefix.
             if package:config("nvdec") or package:config("nvenc") then
                 local nvcodec = package:dep("nv-codec-headers")
                 assert(nvcodec, "nv-codec-headers dependency is required for NVDEC/NVENC")
 
-                local pkgconfig_dirs = {
-                    nvcodec:installdir("lib", "pkgconfig"),
-                    nvcodec:installdir("share", "pkgconfig")
-                }
-                local ffnvcodec_dir
+                local nvcodec_include = nvcodec:installdir("include", "ffnvcodec")
+                assert(os.isdir(nvcodec_include),
+                    "nv-codec-headers was installed, but include/ffnvcodec could not be found")
 
-                for _, pkgconfig_dir in ipairs(pkgconfig_dirs) do
-                    if os.isfile(path.join(pkgconfig_dir, "ffnvcodec.pc")) then
-                        ffnvcodec_dir = path.cygwin(pkgconfig_dir)
-                        break
-                    end
-                end
+                local pkgconfig_dir = path.join(os.curdir(), ".xmake-ffnvcodec-pkgconfig")
+                os.mkdir(pkgconfig_dir)
 
-                assert(ffnvcodec_dir,
-                    "nv-codec-headers was installed, but ffnvcodec.pc could not be found")
+                local nvcodec_prefix = path.unix(nvcodec:installdir())
+                local nvcodec_version = tostring(nvcodec:version()):gsub("^n", "")
+                local pcfile = path.join(pkgconfig_dir, "ffnvcodec.pc")
 
+                io.writefile(pcfile, string.format([[prefix=%s
+includedir=${prefix}/include
+
+Name: ffnvcodec
+Description: FFmpeg version of Nvidia Codec SDK headers
+Version: %s
+Cflags: -I${includedir}
+]], nvcodec_prefix, nvcodec_version))
+
+                -- configure runs under MSYS2, whose pkg-config expects a
+                -- POSIX-style search path.  Put our generated metadata first.
+                local msys_pkgconfig_dir = path.cygwin(pkgconfig_dir)
                 if envs.PKG_CONFIG_PATH and #envs.PKG_CONFIG_PATH > 0 then
-                    envs.PKG_CONFIG_PATH = envs.PKG_CONFIG_PATH .. ":" .. ffnvcodec_dir
+                    envs.PKG_CONFIG_PATH = msys_pkgconfig_dir .. ":" .. envs.PKG_CONFIG_PATH
                 else
-                    envs.PKG_CONFIG_PATH = ffnvcodec_dir
+                    envs.PKG_CONFIG_PATH = msys_pkgconfig_dir
                 end
             end
 
