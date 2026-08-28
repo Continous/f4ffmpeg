@@ -28,6 +28,8 @@
 #include <RE/B/BSShaderProperty.h>
 #include <RE/B/BSShaderTextureSet.h>
 #include <RE/B/BSTextureSet.h>
+#include <RE/N/NiAVObject.h>
+#include <RE/N/NiNode.h>
 #include <RE/N/NiPointer.h>
 #include <RE/N/NiTexture.h>
 #include <REL/Relocation.h>
@@ -2030,11 +2032,24 @@ namespace f4ffmpeg
 
         std::shared_mutex touchedTvNodesMutex;
 
-        // BSShaderProperty::fadeNode is instance-local render ownership. Using
-        // it as the association key means the effect options apply only to the
-        // particular TV/NIF instance whose screen texture f4ffmpeg is replacing.
+        // BSShaderProperty::fadeNode is the cheapest ownership key and works for
+        // many TV NIFs, but not every asset gives all sibling effect properties
+        // the same fadeNode. Keep it as the fast path and supplement it with a
+        // shallow scene-graph ancestry association keyed from the handled screen
+        // geometry. Limiting ancestry depth keeps the fallback local to the placed
+        // NIF instead of eventually matching a broad cell/world scene root.
         std::unordered_set<const void*>
             touchedTvNodes;
+
+        constexpr std::size_t maxTvOwnershipAncestorDepth = 4;
+
+        std::shared_mutex touchedTvGeometryAncestorsMutex;
+        std::unordered_set<const RE::NiAVObject*>
+            touchedTvGeometryAncestors;
+
+        std::mutex tvGeometryAssociationDiagnosticMutex;
+        std::unordered_set<const RE::BSGeometry*>
+            tvGeometryAssociationDiagnostics;
 
         // Once a touched-TV effect property has been classified and its matching
         // config option is enabled, GetBaseTexture returns nullptr for this exact
@@ -2102,6 +2117,116 @@ namespace f4ffmpeg
             return touchedTvNodes.find(
                        owner
                    ) != touchedTvNodes.end();
+        }
+
+        void markTvGeometryTouched(
+            const RE::BSGeometry* geometry)
+        {
+            if (geometry == nullptr)
+                return;
+
+            std::array<
+                const RE::NiAVObject*,
+                maxTvOwnershipAncestorDepth>
+                ancestors{};
+
+            std::size_t count = 0;
+            const RE::NiAVObject* current = geometry;
+
+            while (
+                current != nullptr &&
+                current->parent != nullptr &&
+                count < ancestors.size())
+            {
+                current = current->parent;
+                ancestors[count++] = current;
+            }
+
+            if (count == 0)
+                return;
+
+            std::unique_lock lock(
+                touchedTvGeometryAncestorsMutex
+            );
+
+            for (std::size_t index = 0; index < count; ++index)
+            {
+                touchedTvGeometryAncestors.emplace(
+                    ancestors[index]
+                );
+            }
+        }
+
+        bool isTvGeometryTouched(
+            const RE::BSGeometry* geometry)
+        {
+            if (geometry == nullptr)
+                return false;
+
+            const RE::NiAVObject* current = geometry;
+
+            std::shared_lock lock(
+                touchedTvGeometryAncestorsMutex
+            );
+
+            for (
+                std::size_t depth = 0;
+                depth < maxTvOwnershipAncestorDepth &&
+                    current != nullptr &&
+                    current->parent != nullptr;
+                ++depth)
+            {
+                current = current->parent;
+
+                if (touchedTvGeometryAncestors.find(current) !=
+                    touchedTvGeometryAncestors.end())
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        bool isTvInstanceTouched(
+            const RE::BSShaderProperty* shaderProperty,
+            const RE::BSGeometry* geometry)
+        {
+            if (isTvNodeTouched(shaderProperty))
+                return true;
+
+            if (!isTvGeometryTouched(geometry))
+                return false;
+
+            // Once scene ancestry proves this property belongs to a handled TV,
+            // promote its fadeNode too. Subsequent sibling effects on the same
+            // alternate fadeNode then take the cheap path.
+            markTvNodeTouched(shaderProperty);
+
+            bool logAssociation = false;
+
+            {
+                std::scoped_lock lock(
+                    tvGeometryAssociationDiagnosticMutex
+                );
+
+                logAssociation =
+                    tvGeometryAssociationDiagnostics.emplace(
+                        geometry
+                    ).second;
+            }
+
+            if (logAssociation)
+            {
+                REX::INFO(
+                    "f4ffmpeg associated touched-TV geometry '{}' via scene-graph ancestry fallback.",
+                    geometry != nullptr && geometry->name.c_str() != nullptr
+                        ? geometry->name.c_str()
+                        : "<unnamed>"
+                );
+            }
+
+            return true;
         }
 
         void appendEffectSignaturePart(
@@ -2390,9 +2515,12 @@ namespace f4ffmpeg
 
             if (
                 shaderProperty != nullptr &&
-                isTvNodeTouched(shaderProperty) &&
                 isWorkshopTvEffectTextureNulled(shaderProperty))
             {
+                // Properties only enter the null set after GetRenderPasses has
+                // proven they belong to a touched TV (fadeNode or scene ancestry).
+                // GetBaseTexture has no geometry argument, so the property-local
+                // authorization itself is the durable ownership proof here.
                 return nullptr;
             }
 
@@ -2451,18 +2579,24 @@ namespace f4ffmpeg
 
                 if (target)
                 {
-                    // This particular fade-node/NIF instance is now proven to
-                    // contain a texture f4ffmpeg handles. Sibling TV effects can
-                    // be changed without affecting unrelated vanilla TVs.
+                    // This rendered screen is now proven to be one f4ffmpeg
+                    // handles. Record both ownership forms: fadeNode for the fast
+                    // path and a shallow parent chain for TV assets whose sibling
+                    // effect properties use different fade nodes.
                     markTvNodeTouched(
                         shaderProperty
+                    );
+
+                    markTvGeometryTouched(
+                        geometry
                     );
                 }
             }
 
             const bool touched =
-                isTvNodeTouched(
-                    shaderProperty
+                isTvInstanceTouched(
+                    shaderProperty,
+                    geometry
                 );
 
             workshopTvEffectKind effectKind =
