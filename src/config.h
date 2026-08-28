@@ -22,6 +22,17 @@ namespace f4ffmpeg::config
         0.250
     };
 
+    // CPU-side YUV -> RGBA conversion policy.
+    // cheapest: legacy SWS_BILINEAR path with libswscale defaults.
+    // balanced: metadata-aware bicubic/full-chroma reconstruction.
+    // quality: metadata-aware Lanczos/full-chroma reconstruction with
+    //          error-diffusion dithering for >8-bit sources.
+    inline REX::TTomlSetting<std::string> conversionQuality{
+        "Playback",
+        "ConversionQuality",
+        "balanced"
+    };
+
     // Workshop-TV presentation effects. nifHandler scopes these to scene
     // instances whose screen texture is actually handled by f4ffmpeg; vanilla
     // TVs that are not video targets are left untouched.

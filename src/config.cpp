@@ -52,6 +52,11 @@ namespace f4ffmpeg::config
         applyLogLevel();
 
         spdlog::debug(
+            "Playback.ConversionQuality={}",
+            conversionQuality.GetValue()
+        );
+
+        spdlog::debug(
             "Textures.DisableWorkshopTVRasterScan={}, "
             "Textures.DisableWorkshopTVStatic={}, "
             "Textures.DisableWorkshopTVWarp={}",

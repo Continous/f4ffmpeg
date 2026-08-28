@@ -1,4 +1,5 @@
 #include "decoder.h"
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -9,6 +10,7 @@
 #include <vector>
 #include "pch.h"
 #include "graphics.h"
+#include "config.h"
 #include <cmath>
 #include <filesystem>
 
@@ -20,6 +22,7 @@ extern "C"
 #include <libavutil/hwcontext.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/log.h>
+#include <libavutil/opt.h>
 }
 
 #ifdef ERROR
@@ -32,6 +35,116 @@ namespace f4ffmpeg
 
 namespace
 {
+    struct conversionPolicy
+    {
+        const char* name =
+            "balanced";
+
+        int swsFlags =
+            SWS_BICUBIC |
+            SWS_FULL_CHR_H_INT |
+            SWS_ACCURATE_RND;
+
+        bool honorMetadata = true;
+        bool errorDiffusion = false;
+    };
+
+    char conversionAsciiLower(
+        char value)
+    {
+        if (
+            value >= 'A' &&
+            value <= 'Z')
+        {
+            return static_cast<char>(
+                value - 'A' + 'a'
+            );
+        }
+
+        return value;
+    }
+
+    conversionPolicy getConversionPolicy()
+    {
+        std::string configured =
+            config::conversionQuality.GetValue();
+
+        for (auto& character : configured)
+        {
+            character =
+                conversionAsciiLower(
+                    character
+                );
+        }
+
+        if (
+            configured == "cheapest" ||
+            configured == "cheap" ||
+            configured == "legacy")
+        {
+            return {
+                "cheapest",
+                SWS_BILINEAR,
+                false,
+                false
+            };
+        }
+
+        if (
+            configured == "quality" ||
+            configured == "high" ||
+            configured == "best")
+        {
+            return {
+                "quality",
+                SWS_LANCZOS |
+                    SWS_FULL_CHR_H_INT |
+                    SWS_ACCURATE_RND,
+                true,
+                true
+            };
+        }
+
+        if (
+            configured != "balanced" &&
+            configured != "default" &&
+            !configured.empty())
+        {
+            REX::WARN(
+                "Unknown Playback.ConversionQuality '{}'; "
+                "using balanced conversion.",
+                configured
+            );
+        }
+
+        return {
+            "balanced",
+            SWS_BICUBIC |
+                SWS_FULL_CHR_H_INT |
+                SWS_ACCURATE_RND,
+            true,
+            false
+        };
+    }
+
+    const conversionPolicy& activeConversionPolicy()
+    {
+        static const conversionPolicy policy = []
+        {
+            const auto selected =
+                getConversionPolicy();
+
+            REX::INFO(
+                "f4ffmpeg frame conversion profile: {}.",
+                selected.name
+            );
+
+            return selected;
+        }();
+
+        return policy;
+    }
+
     struct convertedRgbaFrame
     {
         std::vector<std::uint8_t> pixels;
@@ -39,6 +152,380 @@ namespace
         int height = 0;
         int stride = 0;
     };
+
+    int sourceBitDepth(
+        AVPixelFormat format)
+    {
+        const auto* descriptor =
+            av_pix_fmt_desc_get(
+                format
+            );
+
+        if (descriptor == nullptr)
+            return 8;
+
+        int depth = 8;
+
+        for (
+            int index = 0;
+            index < descriptor->nb_components;
+            ++index)
+        {
+            depth =
+                std::max(
+                    depth,
+                    descriptor->comp[index].depth
+                );
+        }
+
+        return depth;
+    }
+
+    int resolvedSwsColorSpace(
+        const AVFrame& source)
+    {
+        switch (source.colorspace)
+        {
+            case AVCOL_SPC_BT709:
+                return SWS_CS_ITU709;
+
+            case AVCOL_SPC_FCC:
+                return SWS_CS_FCC;
+
+            case AVCOL_SPC_BT470BG:
+            case AVCOL_SPC_SMPTE170M:
+                return SWS_CS_ITU601;
+
+            case AVCOL_SPC_SMPTE240M:
+                return SWS_CS_SMPTE240M;
+
+            case AVCOL_SPC_BT2020_NCL:
+            case AVCOL_SPC_BT2020_CL:
+                // libswscale 7.1 exposes one BT.2020 coefficient table.
+                return SWS_CS_BT2020;
+
+            default:
+                break;
+        }
+
+        // Match common video convention when the stream leaves matrix metadata
+        // unspecified: HD/UHD content is normally BT.709, SD content BT.601.
+        if (
+            source.width >= 1280 ||
+            source.height > 576)
+        {
+            return SWS_CS_ITU709;
+        }
+
+        return SWS_CS_ITU601;
+    }
+
+    int resolvedSourceRange(
+        const AVFrame& source,
+        AVPixelFormat sourceFormat)
+    {
+        if (source.color_range == AVCOL_RANGE_JPEG)
+            return 1;
+
+        if (source.color_range == AVCOL_RANGE_MPEG)
+            return 0;
+
+        const auto* descriptor =
+            av_pix_fmt_desc_get(
+                sourceFormat
+            );
+
+        if (
+            descriptor != nullptr &&
+            (
+                descriptor->flags &
+                AV_PIX_FMT_FLAG_RGB
+            ) != 0)
+        {
+            return 1;
+        }
+
+        // Traditional YUV video defaults to studio/limited range when the
+        // decoder does not provide explicit range metadata.
+        return 0;
+    }
+
+    void calculateSourceChromaPosition(
+        const AVFrame& source,
+        AVPixelFormat sourceFormat,
+        int& horizontal,
+        int& vertical)
+    {
+        horizontal = -513;
+        vertical = -513;
+
+        const auto* descriptor =
+            av_pix_fmt_desc_get(
+                sourceFormat
+            );
+
+        if (
+            descriptor == nullptr ||
+            (
+                descriptor->flags &
+                AV_PIX_FMT_FLAG_RGB
+            ) != 0)
+        {
+            return;
+        }
+
+        AVChromaLocation location =
+            source.chroma_location;
+
+        if (location == AVCHROMA_LOC_UNSPECIFIED)
+        {
+            // libswscale's compatibility default is centered chroma.
+            location =
+                AVCHROMA_LOC_CENTER;
+        }
+
+        int horizontalPosition = 0;
+        int verticalPosition = 0;
+
+        if (av_chroma_location_enum_to_pos(
+                &horizontalPosition,
+                &verticalPosition,
+                location
+            ) < 0)
+        {
+            return;
+        }
+
+        horizontalPosition *=
+            (1 << descriptor->log2_chroma_w) - 1;
+
+        verticalPosition *=
+            (1 << descriptor->log2_chroma_h) - 1;
+
+        if (descriptor->log2_chroma_w != 0)
+        {
+            horizontal =
+                horizontalPosition;
+        }
+
+        if (descriptor->log2_chroma_h != 0)
+        {
+            vertical =
+                verticalPosition;
+        }
+    }
+
+    SwsContext* createMetadataAwareSwsContext(
+        const AVFrame& source,
+        AVPixelFormat sourceFormat,
+        const conversionPolicy& policy)
+    {
+        SwsContext* sws =
+            sws_alloc_context();
+
+        if (sws == nullptr)
+            return nullptr;
+
+        const int width =
+            source.width;
+
+        const int height =
+            source.height;
+
+        auto setInteger =
+            [sws](
+                const char* name,
+                std::int64_t value)
+            {
+                return av_opt_set_int(
+                    sws,
+                    name,
+                    value,
+                    0
+                ) >= 0;
+            };
+
+        bool configured =
+            setInteger("srcw", width) &&
+            setInteger("srch", height) &&
+            setInteger("src_format", sourceFormat) &&
+            setInteger("dstw", width) &&
+            setInteger("dsth", height) &&
+            setInteger("dst_format", AV_PIX_FMT_RGBA) &&
+            setInteger("sws_flags", policy.swsFlags) &&
+            setInteger(
+                "src_range",
+                resolvedSourceRange(
+                    source,
+                    sourceFormat
+                )
+            ) &&
+            // Packed RGB output is always represented as full-range bytes.
+            setInteger("dst_range", 1);
+
+        int horizontalChroma = -513;
+        int verticalChroma = -513;
+
+        calculateSourceChromaPosition(
+            source,
+            sourceFormat,
+            horizontalChroma,
+            verticalChroma
+        );
+
+        configured =
+            configured &&
+            setInteger(
+                "src_h_chr_pos",
+                horizontalChroma
+            ) &&
+            setInteger(
+                "src_v_chr_pos",
+                verticalChroma
+            );
+
+        if (
+            policy.errorDiffusion &&
+            sourceBitDepth(sourceFormat) > 8)
+        {
+            configured =
+                configured &&
+                av_opt_set(
+                    sws,
+                    "sws_dither",
+                    "ed",
+                    0
+                ) >= 0;
+        }
+
+        if (
+            !configured ||
+            sws_init_context(
+                sws,
+                nullptr,
+                nullptr
+            ) < 0)
+        {
+            sws_freeContext(
+                sws
+            );
+
+            return nullptr;
+        }
+
+        const auto* sourceDescriptor =
+            av_pix_fmt_desc_get(
+                sourceFormat
+            );
+
+        // Matrix/range conversion is only meaningful for YUV-family inputs.
+        if (
+            sourceDescriptor == nullptr ||
+            (
+                sourceDescriptor->flags &
+                AV_PIX_FMT_FLAG_RGB
+            ) == 0)
+        {
+            const int colorSpace =
+                resolvedSwsColorSpace(
+                    source
+                );
+
+            const int* coefficients =
+                sws_getCoefficients(
+                    colorSpace
+                );
+
+            if (coefficients != nullptr)
+            {
+                const int colorResult =
+                    sws_setColorspaceDetails(
+                        sws,
+                        coefficients,
+                        resolvedSourceRange(
+                            source,
+                            sourceFormat
+                        ),
+                        coefficients,
+                        1,
+                        0,
+                        1 << 16,
+                        1 << 16
+                    );
+
+                if (colorResult < 0)
+                {
+                    sws_freeContext(
+                        sws
+                    );
+
+                    return nullptr;
+                }
+            }
+        }
+
+        return sws;
+    }
+
+    SwsContext* createConversionContext(
+        const AVFrame& source,
+        AVPixelFormat sourceFormat,
+        const conversionPolicy& policy)
+    {
+        if (!policy.honorMetadata)
+        {
+            // Preserve the original correctness-first conversion path exactly.
+            return sws_getContext(
+                source.width,
+                source.height,
+                sourceFormat,
+                source.width,
+                source.height,
+                AV_PIX_FMT_RGBA,
+                SWS_BILINEAR,
+                nullptr,
+                nullptr,
+                nullptr
+            );
+        }
+
+        if (auto* enhanced =
+                createMetadataAwareSwsContext(
+                    source,
+                    sourceFormat,
+                    policy
+                ))
+        {
+            return enhanced;
+        }
+
+        static std::atomic_bool fallbackReported =
+            false;
+
+        if (!fallbackReported.exchange(
+                true,
+                std::memory_order_acq_rel
+            ))
+        {
+            REX::WARN(
+                "Enhanced frame conversion initialization failed; "
+                "falling back to cheapest conversion."
+            );
+        }
+
+        return sws_getContext(
+            source.width,
+            source.height,
+            sourceFormat,
+            source.width,
+            source.height,
+            AV_PIX_FMT_RGBA,
+            SWS_BILINEAR,
+            nullptr,
+            nullptr,
+            nullptr
+        );
+    }
 
     bool convertFrameToRgba(
         const AVFrame& frame,
@@ -105,6 +592,22 @@ namespace
                 return false;
             }
 
+            // av_hwframe_transfer_data() transfers the surface contents, not the
+            // decoded frame's presentation metadata. Carry the color properties
+            // forward explicitly so the enhanced conversion modes can honor them.
+            transferred->color_range =
+                frame.color_range;
+            transferred->color_primaries =
+                frame.color_primaries;
+            transferred->color_trc =
+                frame.color_trc;
+            transferred->colorspace =
+                frame.colorspace;
+            transferred->chroma_location =
+                frame.chroma_location;
+            transferred->sample_aspect_ratio =
+                frame.sample_aspect_ratio;
+
             source =
                 transferred;
         }
@@ -131,18 +634,14 @@ namespace
                 source->format
             );
 
+        const auto& policy =
+            activeConversionPolicy();
+
         SwsContext* sws =
-            sws_getContext(
-                width,
-                height,
+            createConversionContext(
+                *source,
                 sourceFormat,
-                width,
-                height,
-                AV_PIX_FMT_RGBA,
-                SWS_BILINEAR,
-                nullptr,
-                nullptr,
-                nullptr
+                policy
             );
 
         if (sws == nullptr)
