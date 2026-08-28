@@ -2,7 +2,9 @@
 set_plat("windows")
 set_arch("x64")
 
--- Commonlib toml library.
+-- f4ffmpeg uses REX::TTomlSetting / FTomlSettingStore. CommonLib-shared
+-- keeps TOML support optional and disabled by default, so enable it before
+-- loading CommonLibF4 so the option propagates into commonlib-shared.
 set_config("commonlib_toml", true)
 
 -- include subprojects
@@ -14,7 +16,9 @@ add_repositories(
     {rootdir = os.projectdir()}
 )
 
--- libplacebo is not currently available from xmake.
+-- libplacebo is not currently available from the repositories used by this
+-- project/CI. Define it directly in the project so add_requires() does not
+-- depend on local-repository package discovery.
 package("libplacebo")
     set_homepage("https://libplacebo.org")
     set_description("Reusable library for GPU-accelerated image/video processing")
@@ -30,7 +34,7 @@ package("libplacebo")
         "cee9b076f2c63104ccfd497fa79c39a867293ec4"
     )
 
-    add_deps("meson", "ninja", "pkgconf")
+    add_deps("meson", "ninja", "pkg-config")
     add_deps("shaderc")
     add_deps("spirv-cross", {configs = {shared = true}})
 
@@ -67,7 +71,13 @@ package("libplacebo")
 
         import("package.tools.meson").install(
             package,
-            configs
+            configs,
+            {
+                packagedeps = {
+                    "shaderc",
+                    "spirv-cross"
+                }
+            }
         )
     end)
 
@@ -81,7 +91,9 @@ package("libplacebo")
     end)
 package_end()
 
--- Build FFmpeg with nvdec.
+-- Build FFmpeg with NVIDIA's NVDEC/CUDA decode path available. This remains
+-- runtime-optional: systems without an NVIDIA driver/CUDA bridge simply skip
+-- the backend and fall through to the remaining hardware APIs/software.
 add_requires("ffmpeg", {
     configs = {
         ffmpeg = false,
@@ -92,7 +104,9 @@ add_requires("ffmpeg", {
     }
 })
 
--- libplacebo
+-- libplacebo owns the decoded-frame -> presentation-frame conversion pipeline.
+-- It is built with the D3D11 backend and renders directly into the Fallout
+-- device's canonical RGBA8 presentation texture.
 add_requires("libplacebo 7.360.1")
 
 -- set project constants
