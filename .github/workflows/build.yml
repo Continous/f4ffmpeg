@@ -27,7 +27,6 @@ jobs:
           - releasedbg
         toolchain:
           - msvc
-          - clang-cl
 
     steps:
       - name: checkout
