@@ -34,7 +34,7 @@ package("libplacebo")
         "cee9b076f2c63104ccfd497fa79c39a867293ec4"
     )
 
-    add_deps("meson", "ninja", "pkg-config")
+    add_deps("meson", "ninja", "pkgconf")
     add_deps("shaderc")
     add_deps("spirv-cross", {configs = {shared = true}})
 
