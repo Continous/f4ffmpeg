@@ -21,6 +21,9 @@ add_repositories(
 -- the backend and fall through to the remaining hardware APIs/software.
 add_requires("ffmpeg", {
     configs = {
+        ffmpeg = false,
+        ffprobe = false,
+        ffplay = false,
         nvdec = true,
         libzimg = true
     }

@@ -191,16 +191,17 @@ package("ffmpeg")
             )
         end
 
-        -- zscale is backed by zimg. Keep its paths explicit for the same
-        -- Windows/MSVC+MSYS configure environment in which pkg-config caused
-        -- trouble for ffnvcodec; the configure probe is converted to a direct
-        -- compile/link test below on Windows.
+        -- zscale is backed by zimg. On Windows/MSVC, do not make FFmpeg
+        -- rediscover Xmake's library by the logical -lzimg name: resolve the
+        -- actual installed .lib now and feed that exact path to configure.
+        -- This handles both zimg.lib and libzimg.lib (and debug/name variants).
+        local zimg_library
         if package:config("libzimg") then
             local zimg = package:dep("zimg")
             assert(zimg, "zimg dependency is required for FFmpeg zscale support")
 
             local zimg_include = zimg:installdir("include")
-            local zimg_lib = zimg:installdir("lib")
+            local zimg_libdir = zimg:installdir("lib")
 
             assert(os.isfile(path.join(zimg_include, "zimg.h")),
                 "zimg was installed, but include/zimg.h could not be found")
@@ -210,15 +211,44 @@ package("ffmpeg")
                 "--extra-cflags=-I" .. path.unix(zimg_include)
             )
 
-            if package:has_tool("cc", "cl") then
+            if package:is_plat("windows") and package:has_tool("cc", "cl") then
+                local preferred = {
+                    path.join(zimg_libdir, "zimg.lib"),
+                    path.join(zimg_libdir, "libzimg.lib")
+                }
+
+                for _, candidate in ipairs(preferred) do
+                    if os.isfile(candidate) then
+                        zimg_library = candidate
+                        break
+                    end
+                end
+
+                if not zimg_library then
+                    for _, candidate in ipairs(os.files(path.join(zimg_libdir, "*.lib"))) do
+                        if path.filename(candidate):lower():find("zimg", 1, true) then
+                            zimg_library = candidate
+                            break
+                        end
+                    end
+                end
+
+                assert(zimg_library,
+                    "zimg was installed, but no zimg .lib could be found under " .. zimg_libdir)
+
+                print("FFmpeg zimg library: " .. path.unix(zimg_library))
+
+                -- FFmpeg's MSVC linker wrapper accepts an absolute .lib as an
+                -- ordinary linker input. Putting it in LDFLAGS also makes the
+                -- library available to configure's test_ld() probes.
                 table.insert(
                     configs,
-                    "--extra-ldflags=-LIBPATH:" .. path.unix(zimg_lib)
+                    "--extra-ldflags=" .. path.unix(zimg_library)
                 )
             else
                 table.insert(
                     configs,
-                    "--extra-ldflags=-L" .. path.unix(zimg_lib)
+                    "--extra-ldflags=-L" .. path.unix(zimg_libdir)
                 )
             end
         end
@@ -376,11 +406,19 @@ package("ffmpeg")
             end
 
 
-            if package:config("libzimg") then
+            if package:config("libzimg") and package:has_tool("cc", "cl") then
+                assert(zimg_library,
+                    "zimg library path was not resolved before FFmpeg configure")
+
                 local old_zimg_probe =
                     'enabled libzimg           && require_pkg_config libzimg "zimg >= 2.7.0" zimg.h zimg_get_api_version'
+
+                -- The exact .lib is already present in global LDFLAGS above,
+                -- so the probe only needs to verify that zimg.h and the exported
+                -- zimg_get_api_version symbol can be linked. test_ld() appends
+                -- global LDFLAGS to every configure link test.
                 local new_zimg_probe =
-                    'enabled libzimg           && require libzimg zimg.h zimg_get_api_version -lzimg'
+                    'enabled libzimg           && require libzimg zimg.h zimg_get_api_version'
 
                 io.replace(
                     "configure",
