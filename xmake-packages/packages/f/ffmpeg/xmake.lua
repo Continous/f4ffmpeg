@@ -211,7 +211,7 @@ package("ffmpeg")
                 "--extra-cflags=-I" .. path.unix(zimg_include)
             )
 
-            if package:is_plat("windows") and package:has_tool("cc", "cl") then
+            if package:is_plat("windows") then
                 local preferred = {
                     path.join(zimg_libdir, "zimg.lib"),
                     path.join(zimg_libdir, "libzimg.lib")
@@ -267,7 +267,11 @@ package("ffmpeg")
             local dep = package:dep(i)
             if dep then
                 local linkdirs = path.unix(dep:installdir("lib"))
-                if package:has_tool("cc", "cl") then
+                if package:is_plat("windows") then
+                    -- FFmpeg is configured with --toolchain=msvc for every Windows
+                    -- build, including Xmake clang-cl jobs, so use MSVC/link.exe
+                    -- linker syntax based on the target platform rather than
+                    -- testing whether the compiler executable is literally cl.exe.
                     table.insert(configs, "--extra-ldflags=-LIBPATH:" .. linkdirs)
                 else
                     table.insert(configs, "--extra-ldflags=-L" .. linkdirs)
