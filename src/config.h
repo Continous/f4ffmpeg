@@ -22,12 +22,12 @@ namespace f4ffmpeg::config
         0.250
     };
 
-    // Decoded-frame color conversion policy.
-    // cheapest: legacy SWS_BILINEAR path with libswscale defaults.
-    // balanced: FFmpeg zscale color-management path with bicubic reconstruction;
-    //           HDR sources are tone-mapped to SDR BT.709.
-    // quality: FFmpeg zscale/tonemap path with Lanczos reconstruction and
-    //          error-diffusion dithering, with swscale as a graceful fallback.
+    // Decoded-frame presentation conversion policy. libplacebo is the primary
+    // converter for every decoder backend; libswscale is retained only as a
+    // compatibility fallback when a source format cannot be mapped/rendered.
+    // cheapest: libplacebo fast preset (minimal processing / bilinear-style path).
+    // balanced: libplacebo default/recommended renderer preset.
+    // quality: libplacebo high-quality preset (HQ scaling, debanding/color mapping).
     inline REX::TTomlSetting<std::string> conversionQuality{
         "Playback",
         "ConversionQuality",

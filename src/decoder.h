@@ -109,15 +109,6 @@ namespace f4ffmpeg
         );
 
     private:
-        bool frameProduceVulkan(
-            const AVFrame* frame,
-            producedFrame& output
-        );
-
-        bool frameProduceD3D11(
-            const AVFrame* frame,
-            producedFrame& output
-        );
 
         void buildBackendOrder();
 

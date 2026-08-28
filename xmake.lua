@@ -25,15 +25,20 @@ add_requires("ffmpeg", {
         ffprobe = false,
         ffplay = false,
         nvdec = true,
-        libzimg = true
+        libzimg = false
     }
 })
+
+-- libplacebo owns the decoded-frame -> presentation-frame conversion pipeline.
+-- It is built with the D3D11 backend and renders directly into the Fallout
+-- device's canonical RGBA8 presentation texture.
+add_requires("libplacebo 7.360.1")
 
 -- set project constants
 set_project("f4ffmpeg")
 set_version("0.0.1")
 set_license("GPL-3.0")
-set_languages("c++23")
+set_languages("c11", "c++23")
 set_warnings("allextra")
 
 -- add common rules
@@ -52,9 +57,9 @@ target("f4ffmpeg")
     })
 
     -- add src files
-    add_files("src/**.cpp")
+    add_files("src/**.cpp", "src/**.c")
     add_headerfiles("src/**.h")
     add_includedirs("src")
     set_pcxxheader("src/pch.h")
-    -- Use FFMPEG
-    add_packages("ffmpeg")
+    -- FFmpeg demuxes/decodes. libplacebo performs presentation conversion.
+    add_packages("ffmpeg", "libplacebo")
