@@ -50,7 +50,7 @@ package("ffmpeg")
     add_configs("libzimg",          {description = "Enable zimg-backed zscale color processing filter.", default = false, type = "boolean"})
     add_configs("zimg_cpu_type",    {
         description = "Maximum zimg CPU implementation used by FFmpeg zscale.",
-        default = "avx",
+        default = "sse42",
         type = "string",
         values = {"auto", "none", "sse2", "sse3", "ssse3", "sse41", "sse42", "avx", "f16c", "avx2"}
     })
