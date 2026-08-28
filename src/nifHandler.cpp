@@ -2486,10 +2486,16 @@ namespace f4ffmpeg
 
                 // Never classify the actual handled screen texture as an effect
                 // to remove, even if a mod gives its geometry/material a name
-                // containing one of our diagnostic tokens. For sibling TV effects,
-                // null the property's base texture instead of trying to suppress or
-                // mutate its render-pass list. Bethesda can build the normal pass,
-                // but any virtual GetBaseTexture lookup for this property sees null.
+                // containing one of our diagnostic tokens. For sibling TV effects
+                // with the corresponding option enabled, deliberately use both
+                // suppression boundaries:
+                //
+                //  1. mark the property so virtual GetBaseTexture returns nullptr;
+                //  2. clear/return its engine-owned RenderPassArray before Bethesda
+                //     can construct or submit the effect draw.
+                //
+                // RasterScan keeps its existing SRV-null presentation fallback as
+                // a third layer. Register that binding before the early return.
                 if (
                     !target &&
                     shouldSuppressWorkshopTvEffect(
@@ -2500,9 +2506,34 @@ namespace f4ffmpeg
                         shaderProperty,
                         effectKind
                     );
+
+                    if (
+                        effectKind == workshopTvEffectKind::rasterScan &&
+                        textureName != nullptr &&
+                        *textureName != '\0')
+                    {
+                        registerNiTextureSuppressionBinding(
+                            textureName,
+                            baseTexture,
+                            "BSEffectShaderProperty::GetRenderPasses"
+                        );
+                    }
+
+                    shaderProperty->DoClearRenderPasses();
+
+                    REX::TRACE(
+                        "f4ffmpeg target-local workshop-TV {} property={} blocked render-pass construction after base-texture nulling.",
+                        workshopTvEffectKindName(effectKind),
+                        static_cast<const void*>(shaderProperty)
+                    );
+
+                    return std::addressof(
+                        shaderProperty->renderPassList
+                    );
                 }
             }
 
+            // Only unsuppressed effects reach Bethesda's pass builder.
             auto* passes =
                 originalEffectGetRenderPasses(
                     shaderProperty,
@@ -2526,17 +2557,6 @@ namespace f4ffmpeg
             if (target)
             {
                 registerNiTexturePresentationBinding(
-                    textureName,
-                    baseTexture,
-                    "BSEffectShaderProperty::GetRenderPasses"
-                );
-            }
-            else if (
-                touched &&
-                workshopTvRasterScanSuppressionEnabled &&
-                effectKind == workshopTvEffectKind::rasterScan)
-            {
-                registerNiTextureSuppressionBinding(
                     textureName,
                     baseTexture,
                     "BSEffectShaderProperty::GetRenderPasses"
