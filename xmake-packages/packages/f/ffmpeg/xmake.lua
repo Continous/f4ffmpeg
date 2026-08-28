@@ -48,6 +48,12 @@ package("ffmpeg")
     add_configs("libsvtav1",        {description = "Enable libsvtav1 encoder.", default = false, type = "boolean"})
     add_configs("libdav1d",         {description = "Enable libdav1d decoder.", default = false, type = "boolean"})
     add_configs("libzimg",          {description = "Enable zimg-backed zscale color processing filter.", default = false, type = "boolean"})
+    add_configs("zimg_cpu_type",    {
+        description = "Maximum zimg CPU implementation used by FFmpeg zscale.",
+        default = "avx",
+        type = "string",
+        values = {"auto", "none", "sse2", "sse3", "ssse3", "sse41", "sse42", "avx", "f16c", "avx2"}
+    })
     add_configs("iconv",            {description = "Enable libiconv library.", default = false, type = "boolean"})
     add_configs("vaapi",            {description = "Enable vaapi library.", default = false, type = "boolean"})
     add_configs("vdpau",            {description = "Enable vdpau library.", default = false, type = "boolean"})
@@ -253,7 +259,8 @@ package("ffmpeg")
             end
         end
         for name, enabled in table.orderpairs(package:configs()) do
-            if not package:extraconf("configs", name, "builtin") then
+            if name ~= "zimg_cpu_type" and
+               not package:extraconf("configs", name, "builtin") then
                 if enabled then
                     table.insert(configs, "--enable-" .. name)
                 else
@@ -447,6 +454,81 @@ package("ffmpeg")
                 config_encodings=$(uchardet $TMPH)
                 { printf '\xEF\xBB\xBF'; iconv -f "$config_encodings" -t UTF-8 -c $TMPH; } > config.h;
                 ]], {plain = true})
+
+            -- FFmpeg hard-codes ZIMG_CPU_AUTO_64B in vf_zscale.c.
+            -- Replace it with the CPU level selected by this Xmake package config.
+            if package:config("libzimg") then
+                local zscale_source = "libavfilter/vf_zscale.c"
+                local requested_cpu = package:config("zimg_cpu_type") or "avx"
+
+                local zimg_cpu_types = {
+                    auto  = "ZIMG_CPU_AUTO_64B",
+                    none  = "ZIMG_CPU_NONE",
+                    sse2  = "ZIMG_CPU_X86_SSE2",
+                    sse3  = "ZIMG_CPU_X86_SSE3",
+                    ssse3 = "ZIMG_CPU_X86_SSSE3",
+                    sse41 = "ZIMG_CPU_X86_SSE41",
+                    sse42 = "ZIMG_CPU_X86_SSE42",
+                    avx   = "ZIMG_CPU_X86_AVX",
+                    f16c  = "ZIMG_CPU_X86_F16C",
+                    avx2  = "ZIMG_CPU_X86_AVX2"
+                }
+
+                local selected_cpu = zimg_cpu_types[requested_cpu]
+                assert(
+                    selected_cpu,
+                    "unsupported zimg_cpu_type: " .. tostring(requested_cpu)
+                )
+
+                local main_auto =
+                    "s->params.cpu_type = ZIMG_CPU_AUTO_64B;"
+                local alpha_auto =
+                    "s->alpha_params.cpu_type = ZIMG_CPU_AUTO_64B;"
+                local main_selected =
+                    "s->params.cpu_type = " .. selected_cpu .. ";"
+                local alpha_selected =
+                    "s->alpha_params.cpu_type = " .. selected_cpu .. ";"
+
+                local zscale_text = io.readfile(zscale_source)
+                assert(
+                    zscale_text,
+                    "could not read FFmpeg libavfilter/vf_zscale.c"
+                )
+                assert(
+                    zscale_text:find(main_auto, 1, true),
+                    "FFmpeg zscale main CPU-dispatch assignment was not found"
+                )
+                assert(
+                    zscale_text:find(alpha_auto, 1, true),
+                    "FFmpeg zscale alpha CPU-dispatch assignment was not found"
+                )
+
+                io.replace(
+                    zscale_source,
+                    main_auto,
+                    main_selected,
+                    {plain = true}
+                )
+                io.replace(
+                    zscale_source,
+                    alpha_auto,
+                    alpha_selected,
+                    {plain = true}
+                )
+
+                zscale_text = io.readfile(zscale_source)
+                assert(
+                    zscale_text:find(main_selected, 1, true) and
+                    zscale_text:find(alpha_selected, 1, true),
+                    "failed to set FFmpeg zscale/zimg CPU type to " .. requested_cpu
+                )
+
+                print(
+                    "FFmpeg zscale: zimg cpu_type=" ..
+                    requested_cpu ..
+                    " (" .. selected_cpu .. ")"
+                )
+            end
 
             -- fix invalid `-ologo`
             -- https://github.com/xmake-io/xmake-repo/issues/9073#issuecomment-3742290905
