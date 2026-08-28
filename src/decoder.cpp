@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <fstream>
 #include <mutex>
 #include <string>
@@ -17,9 +18,13 @@
 extern "C"
 {
 #include <libavcodec/avcodec.h>
+#include <libavfilter/avfilter.h>
+#include <libavfilter/buffersink.h>
+#include <libavfilter/buffersrc.h>
 #include <libswscale/swscale.h>
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/error.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/log.h>
 #include <libavutil/opt.h>
@@ -35,10 +40,20 @@ namespace f4ffmpeg
 
 namespace
 {
+    enum class conversionMode : std::uint8_t
+    {
+        cheapest,
+        balanced,
+        quality
+    };
+
     struct conversionPolicy
     {
         const char* name =
             "balanced";
+
+        conversionMode mode =
+            conversionMode::balanced;
 
         int swsFlags =
             SWS_BICUBIC |
@@ -84,6 +99,7 @@ namespace
         {
             return {
                 "cheapest",
+                conversionMode::cheapest,
                 SWS_BILINEAR,
                 false,
                 false
@@ -97,6 +113,7 @@ namespace
         {
             return {
                 "quality",
+                conversionMode::quality,
                 SWS_LANCZOS |
                     SWS_FULL_CHR_H_INT |
                     SWS_ACCURATE_RND,
@@ -119,6 +136,7 @@ namespace
 
         return {
             "balanced",
+            conversionMode::balanced,
             SWS_BICUBIC |
                 SWS_FULL_CHR_H_INT |
                 SWS_ACCURATE_RND,
@@ -181,6 +199,125 @@ namespace
         return depth;
     }
 
+    bool isRgbPixelFormat(
+        AVPixelFormat format)
+    {
+        const auto* descriptor =
+            av_pix_fmt_desc_get(
+                format
+            );
+
+        return
+            descriptor != nullptr &&
+            (
+                descriptor->flags &
+                AV_PIX_FMT_FLAG_RGB
+            ) != 0;
+    }
+
+    bool isHdrTransfer(
+        AVColorTransferCharacteristic transfer)
+    {
+        return
+            transfer == AVCOL_TRC_SMPTE2084 ||
+            transfer == AVCOL_TRC_ARIB_STD_B67;
+    }
+
+    void normalizeColorMetadata(
+        AVFrame& frame)
+    {
+        const auto format =
+            static_cast<AVPixelFormat>(
+                frame.format
+            );
+
+        const bool rgb =
+            isRgbPixelFormat(
+                format
+            );
+
+        const bool hd =
+            frame.width >= 1280 ||
+            frame.height > 576;
+
+        const bool hdr =
+            isHdrTransfer(
+                frame.color_trc
+            );
+
+        const bool bt2020Hint =
+            hdr ||
+            frame.color_primaries ==
+                AVCOL_PRI_BT2020 ||
+            frame.colorspace ==
+                AVCOL_SPC_BT2020_NCL ||
+            frame.colorspace ==
+                AVCOL_SPC_BT2020_CL;
+
+        if (
+            frame.colorspace ==
+                AVCOL_SPC_UNSPECIFIED)
+        {
+            frame.colorspace =
+                rgb
+                    ? AVCOL_SPC_RGB
+                    : (
+                        bt2020Hint
+                            ? AVCOL_SPC_BT2020_NCL
+                            : (
+                                hd
+                                    ? AVCOL_SPC_BT709
+                                    : AVCOL_SPC_SMPTE170M
+                            )
+                    );
+        }
+
+        if (
+            frame.color_primaries ==
+                AVCOL_PRI_UNSPECIFIED)
+        {
+            frame.color_primaries =
+                bt2020Hint
+                    ? AVCOL_PRI_BT2020
+                    : (
+                        hd
+                            ? AVCOL_PRI_BT709
+                            : AVCOL_PRI_SMPTE170M
+                    );
+        }
+
+        if (
+            frame.color_trc ==
+                AVCOL_TRC_UNSPECIFIED)
+        {
+            frame.color_trc =
+                hd
+                    ? AVCOL_TRC_BT709
+                    : AVCOL_TRC_SMPTE170M;
+        }
+
+        if (
+            frame.color_range ==
+                AVCOL_RANGE_UNSPECIFIED)
+        {
+            frame.color_range =
+                rgb
+                    ? AVCOL_RANGE_JPEG
+                    : AVCOL_RANGE_MPEG;
+        }
+
+        if (
+            frame.chroma_location ==
+                AVCHROMA_LOC_UNSPECIFIED &&
+            !rgb)
+        {
+            // MPEG/H.26x 4:2:0 convention is left-sited chroma. Streams that
+            // carry explicit siting keep their authored metadata.
+            frame.chroma_location =
+                AVCHROMA_LOC_LEFT;
+        }
+    }
+
     int resolvedSwsColorSpace(
         const AVFrame& source)
     {
@@ -201,15 +338,12 @@ namespace
 
             case AVCOL_SPC_BT2020_NCL:
             case AVCOL_SPC_BT2020_CL:
-                // libswscale 7.1 exposes one BT.2020 coefficient table.
                 return SWS_CS_BT2020;
 
             default:
                 break;
         }
 
-        // Match common video convention when the stream leaves matrix metadata
-        // unspecified: HD/UHD content is normally BT.709, SD content BT.601.
         if (
             source.width >= 1280 ||
             source.height > 576)
@@ -230,23 +364,9 @@ namespace
         if (source.color_range == AVCOL_RANGE_MPEG)
             return 0;
 
-        const auto* descriptor =
-            av_pix_fmt_desc_get(
-                sourceFormat
-            );
-
-        if (
-            descriptor != nullptr &&
-            (
-                descriptor->flags &
-                AV_PIX_FMT_FLAG_RGB
-            ) != 0)
-        {
+        if (isRgbPixelFormat(sourceFormat))
             return 1;
-        }
 
-        // Traditional YUV video defaults to studio/limited range when the
-        // decoder does not provide explicit range metadata.
         return 0;
     }
 
@@ -279,9 +399,8 @@ namespace
 
         if (location == AVCHROMA_LOC_UNSPECIFIED)
         {
-            // libswscale's compatibility default is centered chroma.
             location =
-                AVCHROMA_LOC_CENTER;
+                AVCHROMA_LOC_LEFT;
         }
 
         int horizontalPosition = 0;
@@ -360,7 +479,6 @@ namespace
                     sourceFormat
                 )
             ) &&
-            // Packed RGB output is always represented as full-range bytes.
             setInteger("dst_range", 1);
 
         int horizontalChroma = -513;
@@ -418,7 +536,6 @@ namespace
                 sourceFormat
             );
 
-        // Matrix/range conversion is only meaningful for YUV-family inputs.
         if (
             sourceDescriptor == nullptr ||
             (
@@ -474,7 +591,6 @@ namespace
     {
         if (!policy.honorMetadata)
         {
-            // Preserve the original correctness-first conversion path exactly.
             return sws_getContext(
                 source.width,
                 source.height,
@@ -508,7 +624,7 @@ namespace
             ))
         {
             REX::WARN(
-                "Enhanced frame conversion initialization failed; "
+                "Metadata-aware swscale initialization failed; "
                 "falling back to cheapest conversion."
             );
         }
@@ -525,6 +641,758 @@ namespace
             nullptr,
             nullptr
         );
+    }
+
+    std::string ffmpegErrorString(
+        int error)
+    {
+        char buffer[AV_ERROR_MAX_STRING_SIZE]{};
+
+        if (av_strerror(
+                error,
+                buffer,
+                sizeof(buffer)
+            ) < 0)
+        {
+            return std::to_string(error);
+        }
+
+        return buffer;
+    }
+
+    struct colorFilterKey
+    {
+        int width = 0;
+        int height = 0;
+        int format = AV_PIX_FMT_NONE;
+        int colorspace = AVCOL_SPC_UNSPECIFIED;
+        int primaries = AVCOL_PRI_UNSPECIFIED;
+        int transfer = AVCOL_TRC_UNSPECIFIED;
+        int range = AVCOL_RANGE_UNSPECIFIED;
+        int chromaLocation = AVCHROMA_LOC_UNSPECIFIED;
+        int sarNumerator = 1;
+        int sarDenominator = 1;
+        conversionMode mode = conversionMode::balanced;
+        bool hdr = false;
+
+        bool operator==(
+            const colorFilterKey&) const = default;
+    };
+
+    colorFilterKey makeColorFilterKey(
+        const AVFrame& frame,
+        conversionMode mode)
+    {
+        AVRational sar =
+            frame.sample_aspect_ratio;
+
+        if (
+            sar.num <= 0 ||
+            sar.den <= 0)
+        {
+            sar = {1, 1};
+        }
+
+        return {
+            frame.width,
+            frame.height,
+            frame.format,
+            frame.colorspace,
+            frame.color_primaries,
+            frame.color_trc,
+            frame.color_range,
+            frame.chroma_location,
+            sar.num,
+            sar.den,
+            mode,
+            isHdrTransfer(frame.color_trc)
+        };
+    }
+
+    std::string buildColorFilterDescription(
+        const AVFrame& frame,
+        const conversionPolicy& policy)
+    {
+        const bool hdr =
+            isHdrTransfer(
+                frame.color_trc
+            );
+
+        const bool quality =
+            policy.mode ==
+                conversionMode::quality;
+
+        const char* resizeFilter =
+            quality
+                ? "lanczos"
+                : "bicubic";
+
+        const char* dither =
+            quality
+                ? "error_diffusion"
+                : "ordered";
+
+        if (hdr)
+        {
+            // zscale linearizes PQ/HLG using the frame's authored transfer,
+            // primaries, matrix and range. Tonemap then works in float linear
+            // RGB before zscale normalizes the result to SDR BT.709 RGB.
+            std::string graph =
+                "zscale=transfer=linear:npl=100:filter=";
+
+            graph += resizeFilter;
+            graph +=
+                ",format=pix_fmts=gbrpf32le"
+                ",zscale=primaries=bt709:filter=";
+            graph += resizeFilter;
+            graph +=
+                ",tonemap=tonemap=mobius:desat=2"
+                ",zscale=transfer=bt709:matrix=gbr:range=full:filter=";
+            graph += resizeFilter;
+            graph += ":dither=";
+            graph += dither;
+            graph +=
+                ",format=pix_fmts=gbrp"
+                ",format=pix_fmts=rgba";
+
+            return graph;
+        }
+
+        // SDR still goes through zimg so matrix, transfer, primaries, range,
+        // chroma siting and chroma reconstruction are handled together rather
+        // than split between libswscale defaults and our own assumptions.
+        std::string graph =
+            "zscale=primaries=bt709:transfer=bt709:matrix=gbr:range=full:filter=";
+
+        graph += resizeFilter;
+        graph += ":dither=";
+        graph += dither;
+        graph +=
+            ",format=pix_fmts=gbrp"
+            ",format=pix_fmts=rgba";
+
+        return graph;
+    }
+
+    struct colorFilterPipeline
+    {
+        AVFilterGraph* graph = nullptr;
+        AVFilterContext* source = nullptr;
+        AVFilterContext* sink = nullptr;
+        colorFilterKey key{};
+        bool configured = false;
+
+        ~colorFilterPipeline()
+        {
+            reset();
+        }
+
+        void reset()
+        {
+            if (graph != nullptr)
+            {
+                avfilter_graph_free(
+                    &graph
+                );
+            }
+
+            source = nullptr;
+            sink = nullptr;
+            configured = false;
+        }
+
+        bool configure(
+            const AVFrame& frame,
+            const conversionPolicy& policy)
+        {
+            const colorFilterKey requestedKey =
+                makeColorFilterKey(
+                    frame,
+                    policy.mode
+                );
+
+            if (
+                configured &&
+                requestedKey == key)
+            {
+                return true;
+            }
+
+            reset();
+
+            const auto* bufferSource =
+                avfilter_get_by_name(
+                    "buffer"
+                );
+
+            const auto* bufferSink =
+                avfilter_get_by_name(
+                    "buffersink"
+                );
+
+            const auto* zscale =
+                avfilter_get_by_name(
+                    "zscale"
+                );
+
+            const auto* tonemap =
+                avfilter_get_by_name(
+                    "tonemap"
+                );
+
+            if (
+                bufferSource == nullptr ||
+                bufferSink == nullptr ||
+                zscale == nullptr ||
+                (
+                    requestedKey.hdr &&
+                    tonemap == nullptr
+                ))
+            {
+                REX::WARN(
+                    "FFmpeg color-filter path unavailable: buffer={}, buffersink={}, zscale={}, tonemap={}.",
+                    bufferSource != nullptr,
+                    bufferSink != nullptr,
+                    zscale != nullptr,
+                    tonemap != nullptr
+                );
+
+                return false;
+            }
+
+            graph =
+                avfilter_graph_alloc();
+
+            if (graph == nullptr)
+                return false;
+
+            AVRational sar =
+                frame.sample_aspect_ratio;
+
+            if (
+                sar.num <= 0 ||
+                sar.den <= 0)
+            {
+                sar = {1, 1};
+            }
+
+            char sourceArguments[256]{};
+
+            std::snprintf(
+                sourceArguments,
+                sizeof(sourceArguments),
+                "video_size=%dx%d:pix_fmt=%d:time_base=1/1000000:pixel_aspect=%d/%d:colorspace=%d:range=%d",
+                frame.width,
+                frame.height,
+                frame.format,
+                sar.num,
+                sar.den,
+                frame.colorspace,
+                frame.color_range
+            );
+
+            int result =
+                avfilter_graph_create_filter(
+                    &source,
+                    bufferSource,
+                    "f4ffmpeg_color_in",
+                    sourceArguments,
+                    nullptr,
+                    graph
+                );
+
+            if (result < 0)
+            {
+                REX::WARN(
+                    "Failed to create FFmpeg color-filter buffer source: {}.",
+                    ffmpegErrorString(result)
+                );
+
+                reset();
+                return false;
+            }
+
+            result =
+                avfilter_graph_create_filter(
+                    &sink,
+                    bufferSink,
+                    "f4ffmpeg_color_out",
+                    nullptr,
+                    nullptr,
+                    graph
+                );
+
+            if (result < 0)
+            {
+                REX::WARN(
+                    "Failed to create FFmpeg color-filter buffer sink: {}.",
+                    ffmpegErrorString(result)
+                );
+
+                reset();
+                return false;
+            }
+
+            const AVPixelFormat sinkFormats[]{
+                AV_PIX_FMT_RGBA,
+                AV_PIX_FMT_NONE
+            };
+
+            result =
+                av_opt_set_int_list(
+                    sink,
+                    "pix_fmts",
+                    sinkFormats,
+                    AV_PIX_FMT_NONE,
+                    AV_OPT_SEARCH_CHILDREN
+                );
+
+            if (result < 0)
+            {
+                REX::WARN(
+                    "Failed to constrain FFmpeg color-filter output to RGBA: {}.",
+                    ffmpegErrorString(result)
+                );
+
+                reset();
+                return false;
+            }
+
+            AVFilterInOut* outputs =
+                avfilter_inout_alloc();
+
+            AVFilterInOut* inputs =
+                avfilter_inout_alloc();
+
+            if (
+                outputs == nullptr ||
+                inputs == nullptr)
+            {
+                avfilter_inout_free(
+                    &outputs
+                );
+
+                avfilter_inout_free(
+                    &inputs
+                );
+
+                reset();
+                return false;
+            }
+
+            outputs->name =
+                av_strdup(
+                    "in"
+                );
+            outputs->filter_ctx =
+                source;
+            outputs->pad_idx = 0;
+            outputs->next = nullptr;
+
+            inputs->name =
+                av_strdup(
+                    "out"
+                );
+            inputs->filter_ctx =
+                sink;
+            inputs->pad_idx = 0;
+            inputs->next = nullptr;
+
+            const std::string filterDescription =
+                buildColorFilterDescription(
+                    frame,
+                    policy
+                );
+
+            result =
+                avfilter_graph_parse_ptr(
+                    graph,
+                    filterDescription.c_str(),
+                    &inputs,
+                    &outputs,
+                    nullptr
+                );
+
+            avfilter_inout_free(
+                &inputs
+            );
+
+            avfilter_inout_free(
+                &outputs
+            );
+
+            if (result < 0)
+            {
+                REX::WARN(
+                    "Failed to parse FFmpeg color-filter graph '{}': {}.",
+                    filterDescription,
+                    ffmpegErrorString(result)
+                );
+
+                reset();
+                return false;
+            }
+
+            result =
+                avfilter_graph_config(
+                    graph,
+                    nullptr
+                );
+
+            if (result < 0)
+            {
+                REX::WARN(
+                    "Failed to configure FFmpeg color-filter graph '{}': {}.",
+                    filterDescription,
+                    ffmpegErrorString(result)
+                );
+
+                reset();
+                return false;
+            }
+
+            key = requestedKey;
+            configured = true;
+
+            REX::INFO(
+                "FFmpeg color-filter graph active: profile={}, hdr={}, input={}x{} {}, matrix={}, primaries={}, transfer={}, range={}, graph='{}'.",
+                policy.name,
+                requestedKey.hdr,
+                frame.width,
+                frame.height,
+                av_get_pix_fmt_name(
+                    static_cast<AVPixelFormat>(
+                        frame.format
+                    )
+                )
+                    ? av_get_pix_fmt_name(
+                        static_cast<AVPixelFormat>(
+                            frame.format
+                        )
+                    )
+                    : "unknown",
+                av_color_space_name(
+                    frame.colorspace
+                )
+                    ? av_color_space_name(
+                        frame.colorspace
+                    )
+                    : "unknown",
+                av_color_primaries_name(
+                    frame.color_primaries
+                )
+                    ? av_color_primaries_name(
+                        frame.color_primaries
+                    )
+                    : "unknown",
+                av_color_transfer_name(
+                    frame.color_trc
+                )
+                    ? av_color_transfer_name(
+                        frame.color_trc
+                    )
+                    : "unknown",
+                av_color_range_name(
+                    frame.color_range
+                )
+                    ? av_color_range_name(
+                        frame.color_range
+                    )
+                    : "unknown",
+                filterDescription
+            );
+
+            return true;
+        }
+
+        bool convert(
+            const AVFrame& frame,
+            const conversionPolicy& policy,
+            convertedRgbaFrame& output)
+        {
+            if (!configure(
+                    frame,
+                    policy
+                ))
+            {
+                return false;
+            }
+
+            AVFrame* input =
+                av_frame_clone(
+                    &frame
+                );
+
+            AVFrame* filtered =
+                av_frame_alloc();
+
+            if (
+                input == nullptr ||
+                filtered == nullptr)
+            {
+                av_frame_free(
+                    &input
+                );
+
+                av_frame_free(
+                    &filtered
+                );
+
+                return false;
+            }
+
+            int result =
+                av_buffersrc_add_frame_flags(
+                    source,
+                    input,
+                    AV_BUFFERSRC_FLAG_KEEP_REF
+                );
+
+            av_frame_free(
+                &input
+            );
+
+            if (result < 0)
+            {
+                REX::WARN(
+                    "FFmpeg color-filter input failed: {}.",
+                    ffmpegErrorString(result)
+                );
+
+                av_frame_free(
+                    &filtered
+                );
+
+                reset();
+                return false;
+            }
+
+            result =
+                av_buffersink_get_frame(
+                    sink,
+                    filtered
+                );
+
+            if (result < 0)
+            {
+                REX::WARN(
+                    "FFmpeg color-filter output failed: {}.",
+                    ffmpegErrorString(result)
+                );
+
+                av_frame_free(
+                    &filtered
+                );
+
+                reset();
+                return false;
+            }
+
+            if (
+                filtered->format !=
+                    AV_PIX_FMT_RGBA ||
+                filtered->width <= 0 ||
+                filtered->height <= 0 ||
+                filtered->data[0] == nullptr)
+            {
+                REX::WARN(
+                    "FFmpeg color-filter graph returned unexpected frame format={} size={}x{}.",
+                    filtered->format,
+                    filtered->width,
+                    filtered->height
+                );
+
+                av_frame_free(
+                    &filtered
+                );
+
+                reset();
+                return false;
+            }
+
+            output.width =
+                filtered->width;
+
+            output.height =
+                filtered->height;
+
+            output.stride =
+                filtered->width * 4;
+
+            output.pixels.resize(
+                static_cast<std::size_t>(
+                    output.stride
+                ) *
+                static_cast<std::size_t>(
+                    output.height
+                )
+            );
+
+            const int sourceStride =
+                filtered->linesize[0];
+
+            for (
+                int y = 0;
+                y < output.height;
+                ++y)
+            {
+                const auto* sourceRow =
+                    sourceStride >= 0
+                        ? filtered->data[0] +
+                            static_cast<std::ptrdiff_t>(y) *
+                                sourceStride
+                        : filtered->data[0] +
+                            static_cast<std::ptrdiff_t>(
+                                output.height - 1 - y
+                            ) *
+                                -sourceStride;
+
+                auto* destinationRow =
+                    output.pixels.data() +
+                    static_cast<std::size_t>(y) *
+                        static_cast<std::size_t>(
+                            output.stride
+                        );
+
+                std::memcpy(
+                    destinationRow,
+                    sourceRow,
+                    static_cast<std::size_t>(
+                        output.stride
+                    )
+                );
+            }
+
+            av_frame_free(
+                &filtered
+            );
+
+            return true;
+        }
+    };
+
+    colorFilterPipeline& threadColorFilterPipeline()
+    {
+        thread_local colorFilterPipeline pipeline;
+        return pipeline;
+    }
+
+    bool convertFrameWithColorFilters(
+        const AVFrame& source,
+        const conversionPolicy& policy,
+        convertedRgbaFrame& output)
+    {
+        AVFrame* normalized =
+            av_frame_clone(
+                &source
+            );
+
+        if (normalized == nullptr)
+            return false;
+
+        normalizeColorMetadata(
+            *normalized
+        );
+
+        const bool result =
+            threadColorFilterPipeline().convert(
+                *normalized,
+                policy,
+                output
+            );
+
+        av_frame_free(
+            &normalized
+        );
+
+        return result;
+    }
+
+    bool convertFrameWithSwscale(
+        const AVFrame& source,
+        const conversionPolicy& policy,
+        convertedRgbaFrame& output)
+    {
+        const int width =
+            source.width;
+
+        const int height =
+            source.height;
+
+        const auto sourceFormat =
+            static_cast<AVPixelFormat>(
+                source.format
+            );
+
+        SwsContext* sws =
+            createConversionContext(
+                source,
+                sourceFormat,
+                policy
+            );
+
+        if (sws == nullptr)
+            return false;
+
+        output.width =
+            width;
+
+        output.height =
+            height;
+
+        output.stride =
+            width * 4;
+
+        output.pixels.resize(
+            static_cast<std::size_t>(
+                output.stride
+            ) *
+            static_cast<std::size_t>(
+                height
+            )
+        );
+
+        std::uint8_t* destinationData[4]{
+            output.pixels.data(),
+            nullptr,
+            nullptr,
+            nullptr
+        };
+
+        int destinationStride[4]{
+            output.stride,
+            0,
+            0,
+            0
+        };
+
+        const int convertedHeight =
+            sws_scale(
+                sws,
+                source.data,
+                source.linesize,
+                0,
+                height,
+                destinationData,
+                destinationStride
+            );
+
+        sws_freeContext(
+            sws
+        );
+
+        if (convertedHeight != height)
+        {
+            REX::ERROR(
+                "Produced frame conversion failed: {}/{} rows converted.",
+                convertedHeight,
+                height
+            );
+
+            return false;
+        }
+
+        return true;
     }
 
     bool convertFrameToRgba(
@@ -592,9 +1460,20 @@ namespace
                 return false;
             }
 
-            // av_hwframe_transfer_data() transfers the surface contents, not the
-            // decoded frame's presentation metadata. Carry the color properties
-            // forward explicitly so the enhanced conversion modes can honor them.
+            // Hardware surface transfer does not reliably carry all presentation
+            // metadata. Copy side data/properties first, then explicitly restore
+            // the decoder-authored color description so libavfilter/zscale/tonemap
+            // sees exactly the same color tags as the decoded hardware frame.
+            if (av_frame_copy_props(
+                    transferred,
+                    &frame
+                ) < 0)
+            {
+                REX::TRACE(
+                    "Could not copy all decoded-frame properties after hardware transfer; continuing with explicit color metadata."
+                );
+            }
+
             transferred->color_range =
                 frame.color_range;
             transferred->color_primaries =
@@ -623,103 +1502,54 @@ namespace
             return false;
         }
 
-        const int width =
-            source->width;
-
-        const int height =
-            source->height;
-
-        const auto sourceFormat =
-            static_cast<AVPixelFormat>(
-                source->format
-            );
-
         const auto& policy =
             activeConversionPolicy();
 
-        SwsContext* sws =
-            createConversionContext(
-                *source,
-                sourceFormat,
-                policy
-            );
+        bool converted = false;
 
-        if (sws == nullptr)
+        if (
+            policy.mode !=
+                conversionMode::cheapest)
         {
-            av_frame_free(
-                &transferred
-            );
+            converted =
+                convertFrameWithColorFilters(
+                    *source,
+                    policy,
+                    output
+                );
 
-            REX::ERROR(
-                "Failed to create swscale context for produced frame."
-            );
+            if (!converted)
+            {
+                static std::atomic_bool filterFallbackReported =
+                    false;
 
-            return false;
+                if (!filterFallbackReported.exchange(
+                        true,
+                        std::memory_order_acq_rel
+                    ))
+                {
+                    REX::WARN(
+                        "FFmpeg color-filter conversion failed; falling back to metadata-aware swscale."
+                    );
+                }
+            }
         }
 
-        output.width =
-            width;
-
-        output.height =
-            height;
-
-        output.stride =
-            width * 4;
-
-        output.pixels.resize(
-            static_cast<std::size_t>(
-                output.stride
-            ) *
-            static_cast<std::size_t>(
-                height
-            )
-        );
-
-        std::uint8_t* destinationData[4]{
-            output.pixels.data(),
-            nullptr,
-            nullptr,
-            nullptr
-        };
-
-        int destinationStride[4]{
-            output.stride,
-            0,
-            0,
-            0
-        };
-
-        const int convertedHeight =
-            sws_scale(
-                sws,
-                source->data,
-                source->linesize,
-                0,
-                height,
-                destinationData,
-                destinationStride
-            );
-
-        sws_freeContext(
-            sws
-        );
+        if (!converted)
+        {
+            converted =
+                convertFrameWithSwscale(
+                    *source,
+                    policy,
+                    output
+                );
+        }
 
         av_frame_free(
             &transferred
         );
 
-        if (convertedHeight != height)
-        {
-            REX::ERROR(
-                "Produced frame conversion failed: {}/{} rows converted.",
-                convertedHeight,
-                height
-            );
-
-            return false;
-        }
-
-        return true;
+        return converted;
     }
 
     bool createD3D11FrameFromRgba(

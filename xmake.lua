@@ -2,6 +2,9 @@
 set_plat("windows")
 set_arch("x64")
 
+-- f4ffmpeg uses REX::TTomlSetting / FTomlSettingStore. CommonLib-shared
+-- keeps TOML support optional and disabled by default, so enable it before
+-- loading CommonLibF4 so the option propagates into commonlib-shared.
 set_config("commonlib_toml", true)
 
 -- include subprojects
@@ -18,7 +21,8 @@ add_repositories(
 -- the backend and fall through to the remaining hardware APIs/software.
 add_requires("ffmpeg", {
     configs = {
-        nvdec = true
+        nvdec = true,
+        libzimg = true
     }
 })
 

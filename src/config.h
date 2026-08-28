@@ -22,11 +22,12 @@ namespace f4ffmpeg::config
         0.250
     };
 
-    // CPU-side YUV -> RGBA conversion policy.
+    // Decoded-frame color conversion policy.
     // cheapest: legacy SWS_BILINEAR path with libswscale defaults.
-    // balanced: metadata-aware bicubic/full-chroma reconstruction.
-    // quality: metadata-aware Lanczos/full-chroma reconstruction with
-    //          error-diffusion dithering for >8-bit sources.
+    // balanced: FFmpeg zscale color-management path with bicubic reconstruction;
+    //           HDR sources are tone-mapped to SDR BT.709.
+    // quality: FFmpeg zscale/tonemap path with Lanczos reconstruction and
+    //          error-diffusion dithering, with swscale as a graceful fallback.
     inline REX::TTomlSetting<std::string> conversionQuality{
         "Playback",
         "ConversionQuality",

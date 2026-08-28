@@ -47,6 +47,7 @@ package("ffmpeg")
     add_configs("libaom",           {description = "Enable libaom encoder.", default = false, type = "boolean"})
     add_configs("libsvtav1",        {description = "Enable libsvtav1 encoder.", default = false, type = "boolean"})
     add_configs("libdav1d",         {description = "Enable libdav1d decoder.", default = false, type = "boolean"})
+    add_configs("libzimg",          {description = "Enable zimg-backed zscale color processing filter.", default = false, type = "boolean"})
     add_configs("iconv",            {description = "Enable libiconv library.", default = false, type = "boolean"})
     add_configs("vaapi",            {description = "Enable vaapi library.", default = false, type = "boolean"})
     add_configs("vdpau",            {description = "Enable vdpau library.", default = false, type = "boolean"})
@@ -115,6 +116,7 @@ package("ffmpeg")
             libaom      = "aom",
             libsvtav1   = "svt-av1",
             libdav1d    = "dav1d",
+            libzimg     = "zimg >=2.7.0",
             nvenc       = "nv-codec-headers",
             nvdec       = "nv-codec-headers",
             ffplay      = "libsdl2",
@@ -187,6 +189,38 @@ package("ffmpeg")
                 configs,
                 "--extra-cflags=-I" .. path.unix(nvcodec_include)
             )
+        end
+
+        -- zscale is backed by zimg. Keep its paths explicit for the same
+        -- Windows/MSVC+MSYS configure environment in which pkg-config caused
+        -- trouble for ffnvcodec; the configure probe is converted to a direct
+        -- compile/link test below on Windows.
+        if package:config("libzimg") then
+            local zimg = package:dep("zimg")
+            assert(zimg, "zimg dependency is required for FFmpeg zscale support")
+
+            local zimg_include = zimg:installdir("include")
+            local zimg_lib = zimg:installdir("lib")
+
+            assert(os.isfile(path.join(zimg_include, "zimg.h")),
+                "zimg was installed, but include/zimg.h could not be found")
+
+            table.insert(
+                configs,
+                "--extra-cflags=-I" .. path.unix(zimg_include)
+            )
+
+            if package:has_tool("cc", "cl") then
+                table.insert(
+                    configs,
+                    "--extra-ldflags=-LIBPATH:" .. path.unix(zimg_lib)
+                )
+            else
+                table.insert(
+                    configs,
+                    "--extra-ldflags=-L" .. path.unix(zimg_lib)
+                )
+            end
         end
         for name, enabled in table.orderpairs(package:configs()) do
             if not package:extraconf("configs", name, "builtin") then
@@ -338,6 +372,31 @@ package("ffmpeg")
                         true
                     ),
                     "failed to replace FFmpeg's ffnvcodec pkg-config probe"
+                )
+            end
+
+
+            if package:config("libzimg") then
+                local old_zimg_probe =
+                    'enabled libzimg           && require_pkg_config libzimg "zimg >= 2.7.0" zimg.h zimg_get_api_version'
+                local new_zimg_probe =
+                    'enabled libzimg           && require libzimg zimg.h zimg_get_api_version -lzimg'
+
+                io.replace(
+                    "configure",
+                    old_zimg_probe,
+                    new_zimg_probe,
+                    {plain = true}
+                )
+
+                local configure_text = io.readfile("configure")
+                assert(
+                    not configure_text:find(
+                        old_zimg_probe,
+                        1,
+                        true
+                    ),
+                    "failed to replace FFmpeg's libzimg pkg-config probe"
                 )
             end
 
