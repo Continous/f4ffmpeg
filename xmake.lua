@@ -2,9 +2,7 @@
 set_plat("windows")
 set_arch("x64")
 
--- f4ffmpeg uses REX::TTomlSetting / FTomlSettingStore. CommonLib-shared
--- keeps TOML support optional and disabled by default, so enable it before
--- loading CommonLibF4 so the option propagates into commonlib-shared.
+-- Commonlib toml library.
 set_config("commonlib_toml", true)
 
 -- include subprojects
@@ -16,9 +14,74 @@ add_repositories(
     {rootdir = os.projectdir()}
 )
 
--- Build FFmpeg with NVIDIA's NVDEC/CUDA decode path available. This remains
--- runtime-optional: systems without an NVIDIA driver/CUDA bridge simply skip
--- the backend and fall through to the remaining hardware APIs/software.
+-- libplacebo is not currently available from xmake.
+package("libplacebo")
+    set_homepage("https://libplacebo.org")
+    set_description("Reusable library for GPU-accelerated image/video processing")
+    set_license("LGPL-2.1-or-later")
+
+    add_urls(
+        "https://github.com/haasn/libplacebo.git",
+        {submodules = true}
+    )
+
+    add_versions(
+        "7.360.1",
+        "cee9b076f2c63104ccfd497fa79c39a867293ec4"
+    )
+
+    add_deps("meson", "ninja", "pkgconf")
+    add_deps("shaderc")
+    add_deps("spirv-cross", {configs = {shared = true}})
+
+    on_load("windows", function (package)
+        package:add("defines", "PL_STATIC")
+        package:add(
+            "syslinks",
+            "d3d11",
+            "dxgi",
+            "dxguid",
+            "d3dcompiler",
+            "shlwapi",
+            "version"
+        )
+    end)
+
+    on_install("windows|x64", function (package)
+        local configs = {
+            "-Ddefault_library=static",
+            "-Dd3d11=enabled",
+            "-Dvulkan=disabled",
+            "-Dopengl=disabled",
+            "-Dshaderc=enabled",
+            "-Dglslang=disabled",
+            "-Dlcms=disabled",
+            "-Dlibdovi=disabled",
+            "-Dxxhash=disabled",
+            "-Dunwind=disabled",
+            "-Ddemos=false",
+            "-Dtests=false",
+            "-Dbench=false",
+            "-Dfuzz=false"
+        }
+
+        import("package.tools.meson").install(
+            package,
+            configs
+        )
+    end)
+
+    on_test(function (package)
+        assert(
+            package:has_cfuncs(
+                "pl_renderer_create",
+                {includes = "libplacebo/renderer.h"}
+            )
+        )
+    end)
+package_end()
+
+-- Build FFmpeg with nvdec.
 add_requires("ffmpeg", {
     configs = {
         ffmpeg = false,
@@ -29,9 +92,7 @@ add_requires("ffmpeg", {
     }
 })
 
--- libplacebo owns the decoded-frame -> presentation-frame conversion pipeline.
--- It is built with the D3D11 backend and renders directly into the Fallout
--- device's canonical RGBA8 presentation texture.
+-- libplacebo
 add_requires("libplacebo 7.360.1")
 
 -- set project constants
