@@ -137,17 +137,14 @@ package("libplacebo")
         assert(shaderc_dep, "shaderc dependency was not resolved")
         assert(spirv_cross_dep, "spirv-cross dependency was not resolved")
 
+        -- Meson source strings must not receive raw Windows backslashes.
+        -- Sequences such as \a and \f are interpreted as escapes, which
+        -- corrupts paths like D:\a\f4ffmpeg before find_library() sees them.
         local shaderc_libdir =
-            path.translate(
-                shaderc_dep:installdir("lib"),
-                "/"
-            )
+            shaderc_dep:installdir("lib"):gsub("\\", "/")
 
         local spirv_cross_libdir =
-            path.translate(
-                spirv_cross_dep:installdir("lib"),
-                "/"
-            )
+            spirv_cross_dep:installdir("lib"):gsub("\\", "/")
 
         local glsl_meson =
             path.join(
