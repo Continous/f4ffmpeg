@@ -17,7 +17,6 @@ package("libplacebo")
     add_deps(
         "meson",
         "ninja",
-        "pkgconf",
         {kind = "binary", private = true}
     )
 
