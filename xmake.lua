@@ -12,6 +12,10 @@ add_repositories(
     "f4ffmpeg-repo xmake-packages",
     {rootdir = os.projectdir()}
 )
+add_repositories(
+    "libplacebo xmake-packages",
+    {rootdir = os.projectdir()}
+)
 
 -- Build FFmpeg with NVIDIA's NVDEC/CUDA decode path available. This remains
 -- runtime-optional: systems without an NVIDIA driver/CUDA bridge simply skip
@@ -51,3 +55,4 @@ target("f4ffmpeg")
     set_pcxxheader("src/pch.h")
     -- Use FFMPEG
     add_packages("ffmpeg")
+    add_packages("libplacebo")

@@ -23,6 +23,7 @@ extern "C"
 #include <libavutil/error.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/log.h>
+#include <libswscale/swscale.h>
 }
 
 #ifdef ERROR
