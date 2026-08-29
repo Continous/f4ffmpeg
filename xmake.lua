@@ -2,9 +2,6 @@
 set_plat("windows")
 set_arch("x64")
 
--- f4ffmpeg uses REX::TTomlSetting / FTomlSettingStore. CommonLib-shared
--- keeps TOML support optional and disabled by default, so enable it before
--- loading CommonLibF4 so the option propagates into commonlib-shared.
 set_config("commonlib_toml", true)
 
 -- include subprojects
@@ -16,17 +13,12 @@ add_repositories(
     {rootdir = os.projectdir()}
 )
 
-
 -- Build FFmpeg with NVIDIA's NVDEC/CUDA decode path available. This remains
 -- runtime-optional: systems without an NVIDIA driver/CUDA bridge simply skip
 -- the backend and fall through to the remaining hardware APIs/software.
 add_requires("ffmpeg", {
     configs = {
-        ffmpeg = false,
-        ffprobe = false,
-        ffplay = false,
-        nvdec = true,
-        libzimg = false
+        nvdec = true
     }
 })
 
@@ -34,7 +26,7 @@ add_requires("ffmpeg", {
 set_project("f4ffmpeg")
 set_version("0.0.1")
 set_license("GPL-3.0")
-set_languages("c11", "c++23")
+set_languages("c++23")
 set_warnings("allextra")
 
 -- add common rules
@@ -53,9 +45,9 @@ target("f4ffmpeg")
     })
 
     -- add src files
-    add_files("src/**.cpp", "src/**.c")
+    add_files("src/**.cpp")
     add_headerfiles("src/**.h")
     add_includedirs("src")
     set_pcxxheader("src/pch.h")
-    -- FFmpeg demuxes/decodes and libswscale performs presentation conversion.
+    -- Use FFMPEG
     add_packages("ffmpeg")
