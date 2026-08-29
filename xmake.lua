@@ -2,6 +2,9 @@
 set_plat("windows")
 set_arch("x64")
 
+-- f4ffmpeg uses REX::TTomlSetting / FTomlSettingStore. CommonLib-shared
+-- keeps TOML support optional and disabled by default, so enable it before
+-- loading CommonLibF4 so the option propagates into commonlib-shared.
 set_config("commonlib_toml", true)
 
 -- include subprojects
@@ -12,25 +15,73 @@ add_repositories(
     "f4ffmpeg-repo xmake-packages",
     {rootdir = os.projectdir()}
 )
-add_repositories(
-    "libplacebo xmake-packages",
-    {rootdir = os.projectdir()}
-)
+
 
 -- Build FFmpeg with NVIDIA's NVDEC/CUDA decode path available. This remains
 -- runtime-optional: systems without an NVIDIA driver/CUDA bridge simply skip
 -- the backend and fall through to the remaining hardware APIs/software.
 add_requires("ffmpeg", {
     configs = {
-        nvdec = true
+        ffmpeg = false,
+        ffprobe = false,
+        ffplay = false,
+        nvdec = true,
+        libzimg = false
     }
 })
+
+-- libplacebo is opportunistic. The normal preference order is:
+--   1. statically linked libplacebo from our custom package;
+--   2. a compatible user-provided libplacebo DLL loaded at runtime;
+--   3. libswscale.
+--
+-- f4ffmpeg itself never builds or bundles the shared DLL fallback.
+option("libplacebo_mode")
+    set_default("auto")
+    set_showmenu(true)
+    set_values(
+        "auto",
+        "static",
+        "runtime",
+        "off"
+    )
+    set_description(
+        "libplacebo mode: auto/static/runtime/off"
+    )
+option_end()
+
+local placebo_mode =
+    get_config("libplacebo_mode") or
+    "auto"
+
+if placebo_mode == "static" then
+    -- Strict build mode: configuration fails if the static package cannot be
+    -- built/resolved. Useful for CI and for verifying the built-in path.
+    add_requires(
+        "libplacebo 7.360.1",
+        {
+            alias = "f4ffmpeg-libplacebo",
+            system = false
+        }
+    )
+elseif placebo_mode == "auto" then
+    -- Normal build mode: prefer static libplacebo, but do not make a failure
+    -- in the experimental package prevent f4ffmpeg itself from building.
+    add_requires(
+        "libplacebo 7.360.1",
+        {
+            alias = "f4ffmpeg-libplacebo",
+            optional = true,
+            system = false
+        }
+    )
+end
 
 -- set project constants
 set_project("f4ffmpeg")
 set_version("0.0.1")
 set_license("GPL-3.0")
-set_languages("c++23")
+set_languages("c11", "c++23")
 set_warnings("allextra")
 
 -- add common rules
@@ -49,10 +100,46 @@ target("f4ffmpeg")
     })
 
     -- add src files
-    add_files("src/**.cpp")
+    add_files("src/**.cpp", "src/**.c")
     add_headerfiles("src/**.h")
     add_includedirs("src")
     set_pcxxheader("src/pch.h")
-    -- Use FFMPEG
+
+    -- FFmpeg always provides demux/decode and the libswscale fallback.
     add_packages("ffmpeg")
-    add_packages("libplacebo")
+
+    if placebo_mode == "off" then
+        add_defines(
+            "F4FFMPEG_HAS_LIBPLACEBO_STATIC=0",
+            "F4FFMPEG_ALLOW_LIBPLACEBO_DLL=0"
+        )
+    elseif placebo_mode == "runtime" then
+        -- Never link libplacebo in this mode. Future runtime dispatch may use
+        -- only a compatible user-provided DLL.
+        add_defines(
+            "F4FFMPEG_HAS_LIBPLACEBO_STATIC=0",
+            "F4FFMPEG_ALLOW_LIBPLACEBO_DLL=1"
+        )
+    elseif placebo_mode == "static" then
+        -- add_requires() above is strict in this mode, so reaching the target
+        -- means the static package was successfully resolved.
+        add_packages("f4ffmpeg-libplacebo")
+        add_defines(
+            "F4FFMPEG_HAS_LIBPLACEBO_STATIC=1",
+            "F4FFMPEG_ALLOW_LIBPLACEBO_DLL=1"
+        )
+    elseif has_package("f4ffmpeg-libplacebo") then
+        -- auto mode successfully resolved the preferred built-in package.
+        add_packages("f4ffmpeg-libplacebo")
+        add_defines(
+            "F4FFMPEG_HAS_LIBPLACEBO_STATIC=1",
+            "F4FFMPEG_ALLOW_LIBPLACEBO_DLL=1"
+        )
+    else
+        -- auto mode could not resolve the static package. Keep the plugin
+        -- buildable and permit the optional user-supplied DLL path.
+        add_defines(
+            "F4FFMPEG_HAS_LIBPLACEBO_STATIC=0",
+            "F4FFMPEG_ALLOW_LIBPLACEBO_DLL=1"
+        )
+    end
