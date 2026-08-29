@@ -177,6 +177,70 @@ package("libplacebo")
             "spirv-cross-c-shared -> spirv-cross-c"
         )
 
+        -- MSVC exposes C11 atomics only behind /experimental:c11atomics.
+        -- libplacebo 7.360.1 probes <stdatomic.h>; when that probe fails it
+        -- assumes the platform needs a Unix-style libatomic, which does not
+        -- exist for MSVC. Teach this source version to enable MSVC's actual
+        -- C11 atomics support both for the probe and for the library sources.
+        local src_meson =
+            path.join(
+                "src",
+                "meson.build"
+            )
+
+        assert(
+            os.isfile(src_meson),
+            "libplacebo src/meson.build was not found"
+        )
+
+        local atomic_before =
+            io.readfile(src_meson)
+
+        local old_atomic_block = [[
+if not cc.links(atomic_test)
+  build_deps += cc.find_library('atomic')
+endif
+]]
+
+        local new_atomic_block = [[
+atomic_args = []
+if cc.get_id() == 'msvc'
+  atomic_args += '/experimental:c11atomics'
+  add_project_arguments('/experimental:c11atomics', language: 'c')
+endif
+
+if not cc.links(atomic_test, args: atomic_args)
+  build_deps += cc.find_library('atomic')
+endif
+]]
+
+        assert(
+            atomic_before:find(
+                old_atomic_block,
+                1,
+                true
+            ),
+            "libplacebo atomic probe no longer matches 7.360.1; " ..
+            "review the MSVC atomics patch"
+        )
+
+        local atomic_after =
+            atomic_before:gsub(
+                old_atomic_block,
+                new_atomic_block,
+                1
+            )
+
+        io.writefile(
+            src_meson,
+            atomic_after
+        )
+
+        print(
+            "Patched libplacebo MSVC C11 atomics: " ..
+            "/experimental:c11atomics"
+        )
+
         local configs = {
             "-Ddefault_library=static",
             "-Dauto_features=disabled",
