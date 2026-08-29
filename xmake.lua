@@ -16,80 +16,6 @@ add_repositories(
     {rootdir = os.projectdir()}
 )
 
--- libplacebo is not currently available from the repositories used by this
--- project/CI. Define it directly in the project so add_requires() does not
--- depend on local-repository package discovery.
-package("libplacebo")
-    set_homepage("https://libplacebo.org")
-    set_description("Reusable library for GPU-accelerated image/video processing")
-    set_license("LGPL-2.1-or-later")
-
-    add_urls(
-        "https://github.com/haasn/libplacebo.git",
-        {submodules = true}
-    )
-
-    add_versions(
-        "7.360.1",
-        "cee9b076f2c63104ccfd497fa79c39a867293ec4"
-    )
-
-    add_deps("meson", "ninja", "pkgconf")
-    add_deps("shaderc")
-    add_deps("spirv-cross", {configs = {shared = true}})
-
-    on_load("windows", function (package)
-        package:add("defines", "PL_STATIC")
-        package:add(
-            "syslinks",
-            "d3d11",
-            "dxgi",
-            "dxguid",
-            "d3dcompiler",
-            "shlwapi",
-            "version"
-        )
-    end)
-
-    on_install("windows|x64", function (package)
-        local configs = {
-            "-Ddefault_library=static",
-            "-Dd3d11=enabled",
-            "-Dvulkan=disabled",
-            "-Dopengl=disabled",
-            "-Dshaderc=enabled",
-            "-Dglslang=disabled",
-            "-Dlcms=disabled",
-            "-Dlibdovi=disabled",
-            "-Dxxhash=disabled",
-            "-Dunwind=disabled",
-            "-Ddemos=false",
-            "-Dtests=false",
-            "-Dbench=false",
-            "-Dfuzz=false"
-        }
-
-        import("package.tools.meson").install(
-            package,
-            configs,
-            {
-                packagedeps = {
-                    "shaderc",
-                    "spirv-cross"
-                }
-            }
-        )
-    end)
-
-    on_test(function (package)
-        assert(
-            package:has_cfuncs(
-                "pl_renderer_create",
-                {includes = "libplacebo/renderer.h"}
-            )
-        )
-    end)
-package_end()
 
 -- Build FFmpeg with NVIDIA's NVDEC/CUDA decode path available. This remains
 -- runtime-optional: systems without an NVIDIA driver/CUDA bridge simply skip
@@ -103,11 +29,6 @@ add_requires("ffmpeg", {
         libzimg = false
     }
 })
-
--- libplacebo owns the decoded-frame -> presentation-frame conversion pipeline.
--- It is built with the D3D11 backend and renders directly into the Fallout
--- device's canonical RGBA8 presentation texture.
-add_requires("libplacebo 7.360.1")
 
 -- set project constants
 set_project("f4ffmpeg")
@@ -136,5 +57,5 @@ target("f4ffmpeg")
     add_headerfiles("src/**.h")
     add_includedirs("src")
     set_pcxxheader("src/pch.h")
-    -- FFmpeg demuxes/decodes. libplacebo performs presentation conversion.
-    add_packages("ffmpeg", "libplacebo")
+    -- FFmpeg demuxes/decodes and libswscale performs presentation conversion.
+    add_packages("ffmpeg")
