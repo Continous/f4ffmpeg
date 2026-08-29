@@ -122,12 +122,85 @@ package("libplacebo")
             "spirv-cross-c.pc"
         )
 
-        -- Upstream libplacebo 7.360.1's D3D11 Meson file asks specifically for
-        -- `spirv-cross-c-shared`. That is useful for normal distro builds, but
-        -- f4ffmpeg's built-in path must not acquire a runtime SPIRV-Cross DLL.
+        -- Our Windows/MSVC package already knows exactly where its static
+        -- dependencies live. Avoid libplacebo's pkg-config-only discovery
+        -- path and point Meson directly at the static libraries.
         --
-        -- Replace only that dependency identity. The SPIRV-Cross C API is the
-        -- same; our dependency above deliberately installs its static C target.
+        -- This also prevents the D3D11 backend from requesting the upstream
+        -- `spirv-cross-c-shared` dependency and accidentally introducing a
+        -- runtime SPIRV-Cross DLL.
+        local shaderc_dep =
+            package:dep("shaderc")
+        local spirv_cross_dep =
+            package:dep("spirv-cross")
+
+        assert(shaderc_dep, "shaderc dependency was not resolved")
+        assert(spirv_cross_dep, "spirv-cross dependency was not resolved")
+
+        local shaderc_libdir =
+            path.translate(
+                shaderc_dep:installdir("lib"),
+                "/"
+            )
+
+        local spirv_cross_libdir =
+            path.translate(
+                spirv_cross_dep:installdir("lib"),
+                "/"
+            )
+
+        local glsl_meson =
+            path.join(
+                "src",
+                "glsl",
+                "meson.build"
+            )
+
+        assert(
+            os.isfile(glsl_meson),
+            "libplacebo GLSL Meson definition was not found"
+        )
+
+        local glsl_before =
+            io.readfile(glsl_meson)
+
+        local shaderc_lookup =
+            "shaderc = dependency('shaderc', version: '>=2019.1', required: get_option('shaderc'))"
+
+        assert(
+            glsl_before:find(
+                shaderc_lookup,
+                1,
+                true
+            ),
+            "libplacebo shaderc lookup no longer matches 7.360.1; " ..
+            "review the static shaderc patch"
+        )
+
+        local shaderc_replacement =
+            "shaderc = cc.find_library('shaderc_combined', " ..
+            "required: get_option('shaderc'), " ..
+            "dirs: '" .. shaderc_libdir .. "')"
+
+        io.replace(
+            glsl_meson,
+            shaderc_lookup,
+            shaderc_replacement,
+            {plain = true}
+        )
+
+        local glsl_after =
+            io.readfile(glsl_meson)
+
+        assert(
+            glsl_after:find(
+                "cc.find_library('shaderc_combined'",
+                1,
+                true
+            ),
+            "failed to patch libplacebo shaderc discovery"
+        )
+
         local d3d11_meson =
             path.join(
                 "src",
@@ -140,41 +213,57 @@ package("libplacebo")
             "libplacebo D3D11 Meson definition was not found"
         )
 
-        local before =
+        local d3d_before =
             io.readfile(d3d11_meson)
 
         assert(
-            before:find(
-                "spirv-cross-c-shared",
+            d3d_before:find(
+                "dependency('spirv-cross-c-shared'",
                 1,
                 true
             ),
-            "libplacebo D3D11 Meson definition no longer contains " ..
-            "'spirv-cross-c-shared'; review the package patch for this version"
+            "libplacebo D3D11 SPIRV-Cross lookup no longer matches 7.360.1; " ..
+            "review the static SPIRV-Cross patch"
         )
+
+        local spirv_lookup =
+            "dependency('spirv-cross-c-shared',"
+
+        local spirv_replacement =
+            "cc.find_library('spirv-cross-c', " ..
+            "dirs: '" .. spirv_cross_libdir .. "',"
 
         io.replace(
             d3d11_meson,
-            "spirv-cross-c-shared",
-            "spirv-cross-c",
+            spirv_lookup,
+            spirv_replacement,
             {plain = true}
         )
 
-        local after =
+        local d3d_after =
             io.readfile(d3d11_meson)
 
         assert(
-            not after:find(
+            d3d_after:find(
+                "cc.find_library('spirv-cross-c'",
+                1,
+                true
+            ),
+            "failed to patch libplacebo SPIRV-Cross discovery"
+        )
+
+        assert(
+            not d3d_after:find(
                 "spirv-cross-c-shared",
                 1,
                 true
             ),
-            "failed to patch libplacebo D3D11 SPIRV-Cross dependency"
+            "shared SPIRV-Cross dependency remained after patch"
         )
 
         print(
-            "Patched libplacebo D3D11 dependency: " ..
-            "spirv-cross-c-shared -> spirv-cross-c"
+            "Patched libplacebo dependency discovery for static MSVC: " ..
+            "shaderc_combined.lib + spirv-cross-c.lib (no pkg-config)"
         )
 
         -- MSVC exposes C11 atomics only behind /experimental:c11atomics.
