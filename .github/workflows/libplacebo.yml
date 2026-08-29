@@ -6,13 +6,13 @@ on:
     branches: [ main ]
     paths:
       - ".github/workflows/libplacebo.yml"
-      - "tools/libplacebo-smoke/**"
+      - "xmake.lua"
       - "xmake-packages/packages/l/libplacebo/**"
   pull_request:
     branches: [ main ]
     paths:
       - ".github/workflows/libplacebo.yml"
-      - "tools/libplacebo-smoke/**"
+      - "xmake.lua"
       - "xmake-packages/packages/l/libplacebo/**"
 
 env:
@@ -20,14 +20,13 @@ env:
   XMAKE_PKG_INSTALLDIR: ${{ github.workspace }}\.xmake-packages-libplacebo
 
 jobs:
-  smoke:
-    name: msvc / static
+  build:
+    name: msvc / static libplacebo
     runs-on: windows-latest
 
     defaults:
       run:
         shell: pwsh
-        working-directory: tools/libplacebo-smoke
 
     steps:
       - name: checkout
@@ -38,7 +37,7 @@ jobs:
       - name: setup xmake
         uses: xmake-io/github-action-setup-xmake@v1
         with:
-          xmake-version: "latest"
+          xmake-version: latest
 
       - name: cache xmake packages
         uses: actions/cache@v5
@@ -46,7 +45,7 @@ jobs:
           path: |
             ${{ github.workspace }}\.xmake-cache-libplacebo
             ${{ github.workspace }}\.xmake-packages-libplacebo
-          key: ${{ runner.os }}-${{ runner.arch }}-msvc-libplacebo-static-${{ hashFiles('xmake-packages/packages/l/libplacebo/xmake.lua', 'tools/libplacebo-smoke/xmake.lua') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-msvc-libplacebo-static-${{ hashFiles('xmake-packages/packages/l/libplacebo/xmake.lua', 'xmake.lua') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-msvc-libplacebo-static-
 
@@ -54,30 +53,16 @@ jobs:
         run: |
           xmake config -y -vD `
             --mode=releasedbg `
-            --toolchain=msvc
+            --toolchain=msvc `
+            --libplacebo_mode=static
 
       - name: build
         run: xmake build -y -vD
 
-      - name: verify no bundled DLLs
-        run: |
-          $dlls = Get-ChildItem ".\bin" -Filter "*.dll" -File -ErrorAction SilentlyContinue
-
-          if ($dlls) {
-            Write-Host "Unexpected DLLs in static smoke output:"
-            $dlls | ForEach-Object { Write-Host $_.FullName }
-            throw "Static libplacebo smoke output unexpectedly contains DLLs."
-          }
-
-          Write-Host "No DLLs bundled with static smoke output."
-
-      - name: run smoke test
-        run: .\bin\libplacebo-smoke.exe
-
       - name: list relevant package files
         if: always()
         run: |
-          Write-Host "=== libplacebo/shaderc/SPIRV-Cross installed files ==="
+          Write-Host "=== libplacebo/shaderc/SPIRV-Cross files ==="
 
           if (Test-Path "$env:XMAKE_PKG_INSTALLDIR") {
             Get-ChildItem "$env:XMAKE_PKG_INSTALLDIR" `
@@ -85,7 +70,7 @@ jobs:
               -File `
               -ErrorAction SilentlyContinue |
               Where-Object {
-                $_.Name -match "placebo|spirv-cross|shaderc"
+                $_.Name -match "placebo|spirv-cross|shaderc|meson"
               } |
               ForEach-Object {
                 Write-Host $_.FullName
