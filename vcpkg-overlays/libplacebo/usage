@@ -1,0 +1,4 @@
+libplacebo provides C headers under <libplacebo/...>.
+
+For a static Windows consumer, define PL_STATIC before including libplacebo
+headers and link the libplacebo package plus its transitive vcpkg dependencies.

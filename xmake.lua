@@ -31,7 +31,7 @@ add_requires("ffmpeg", {
 })
 
 -- libplacebo is opportunistic. The normal preference order is:
---   1. statically linked libplacebo from our custom package;
+--   1. statically linked libplacebo from the repository vcpkg overlay;
 --   2. a compatible user-provided libplacebo DLL loaded at runtime;
 --   3. libswscale.
 --
@@ -55,24 +55,20 @@ local placebo_mode =
     "auto"
 
 if placebo_mode == "static" then
-    -- Strict build mode: configuration fails if the static package cannot be
-    -- built/resolved. Useful for CI and for verifying the built-in path.
+    -- vcpkg owns libplacebo's Meson/tool/dependency environment. The repository
+    -- overlay builds libplacebo itself with clang-cl while f4ffmpeg remains MSVC.
     add_requires(
-        "libplacebo 7.360.1",
+        "vcpkg::libplacebo",
         {
-            alias = "f4ffmpeg-libplacebo",
-            system = false
+            alias = "f4ffmpeg-libplacebo"
         }
     )
 elseif placebo_mode == "auto" then
-    -- Normal build mode: prefer static libplacebo, but do not make a failure
-    -- in the experimental package prevent f4ffmpeg itself from building.
     add_requires(
-        "libplacebo 7.360.1",
+        "vcpkg::libplacebo",
         {
             alias = "f4ffmpeg-libplacebo",
-            optional = true,
-            system = false
+            optional = true
         }
     )
 end
@@ -125,6 +121,7 @@ target("f4ffmpeg")
         -- means the static package was successfully resolved.
         add_packages("f4ffmpeg-libplacebo")
         add_defines(
+            "PL_STATIC",
             "F4FFMPEG_HAS_LIBPLACEBO_STATIC=1",
             "F4FFMPEG_ALLOW_LIBPLACEBO_DLL=1"
         )
@@ -132,6 +129,7 @@ target("f4ffmpeg")
         -- auto mode successfully resolved the preferred built-in package.
         add_packages("f4ffmpeg-libplacebo")
         add_defines(
+            "PL_STATIC",
             "F4FFMPEG_HAS_LIBPLACEBO_STATIC=1",
             "F4FFMPEG_ALLOW_LIBPLACEBO_DLL=1"
         )

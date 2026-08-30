@@ -1,0 +1,24 @@
+{
+  "name": "libplacebo",
+  "version": "7.360.1",
+  "description": "GPU-accelerated image/video rendering and color management",
+  "homepage": "https://libplacebo.org/",
+  "license": "LGPL-2.1-or-later",
+  "supports": "windows & !uwp & !xbox",
+  "dependencies": [
+    "shaderc",
+    "spirv-cross",
+    {
+      "name": "pkgconf",
+      "host": true
+    },
+    {
+      "name": "python3",
+      "host": true
+    },
+    {
+      "name": "vcpkg-tool-meson",
+      "host": true
+    }
+  ]
+}

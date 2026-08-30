@@ -7,21 +7,25 @@ on:
     paths:
       - ".github/workflows/libplacebo.yml"
       - "xmake.lua"
-      - "xmake-packages/packages/l/libplacebo/**"
+      - "vcpkg-overlays/libplacebo/**"
+      - "tools/install-libplacebo-vcpkg.ps1"
   pull_request:
     branches: [ main ]
     paths:
       - ".github/workflows/libplacebo.yml"
       - "xmake.lua"
-      - "xmake-packages/packages/l/libplacebo/**"
+      - "vcpkg-overlays/libplacebo/**"
+      - "tools/install-libplacebo-vcpkg.ps1"
 
 env:
-  XMAKE_PKG_CACHEDIR: ${{ github.workspace }}\.xmake-cache-libplacebo
-  XMAKE_PKG_INSTALLDIR: ${{ github.workspace }}\.xmake-packages-libplacebo
+  VCPKG_ROOT: C:\vcpkg
+  VCPKG_OVERLAY_PORTS: ${{ github.workspace }}\vcpkg-overlays
+  VCPKG_DEFAULT_TRIPLET: x64-windows-static
+  VCPKG_DEFAULT_HOST_TRIPLET: x64-windows
 
 jobs:
   build:
-    name: msvc / static libplacebo
+    name: msvc f4ffmpeg + clang-cl libplacebo
     runs-on: windows-latest
 
     defaults:
@@ -39,51 +43,49 @@ jobs:
         with:
           xmake-version: latest
 
-      - name: cache xmake packages
-        uses: actions/cache@v5
-        with:
-          path: |
-            ${{ github.workspace }}\.xmake-cache-libplacebo
-            ${{ github.workspace }}\.xmake-packages-libplacebo
-          key: ${{ runner.os }}-${{ runner.arch }}-msvc-libplacebo-static-${{ hashFiles('xmake-packages/packages/l/libplacebo/xmake.lua', 'xmake.lua') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-msvc-libplacebo-static-
+      - name: show toolchain
+        run: |
+          Write-Host "vcpkg:"
+          & "$env:VCPKG_ROOT\vcpkg.exe" version
 
-      - name: configure
+          Write-Host "clang-cl:"
+          $clang = Get-Command clang-cl.exe -ErrorAction SilentlyContinue
+          if (-not $clang) {
+            $clang = Get-Command clang-cl -ErrorAction SilentlyContinue
+          }
+          if ($clang) {
+            & $clang.Source --version
+          } else {
+            Write-Host "clang-cl is not on PATH; the overlay will probe the Visual Studio LLVM directories."
+          }
+
+      - name: install static libplacebo with vcpkg
+        run: .\tools\install-libplacebo-vcpkg.ps1
+
+      - name: configure f4ffmpeg
         run: |
           xmake config -y -vD `
             --mode=releasedbg `
             --toolchain=msvc `
             --libplacebo_mode=static
 
-      - name: build
+      - name: build f4ffmpeg
         run: xmake build -y -vD
 
-      - name: list relevant package files
+      - name: inspect runtime DLL dependencies
         if: always()
         run: |
-          Write-Host "=== libplacebo/shaderc/SPIRV-Cross files ==="
+          $plugin = Get-ChildItem `
+            -Path "${{ github.workspace }}" `
+            -Recurse `
+            -Filter "f4ffmpeg.dll" `
+            -File `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
 
-          if (Test-Path "$env:XMAKE_PKG_INSTALLDIR") {
-            Get-ChildItem "$env:XMAKE_PKG_INSTALLDIR" `
-              -Recurse `
-              -File `
-              -ErrorAction SilentlyContinue |
-              Where-Object {
-                $_.Name -match "placebo|spirv-cross|shaderc|meson"
-              } |
-              ForEach-Object {
-                Write-Host $_.FullName
-              }
+          if ($plugin) {
+            Write-Host "Inspecting $($plugin.FullName)"
+            dumpbin /dependents $plugin.FullName
+          } else {
+            Write-Host "f4ffmpeg.dll was not produced."
           }
-
-      - name: upload package diagnostics
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: libplacebo-static-msvc-logs
-          path: |
-            .xmake-cache-libplacebo/**/logs/**
-            .xmake-cache-libplacebo/**/meson-logs/**
-            .xmake-cache-libplacebo/**/installdir.failed/logs/**
-          if-no-files-found: ignore
