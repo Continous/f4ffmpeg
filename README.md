@@ -32,6 +32,9 @@ Replacement targets will mirror their actual texture names but instead of Data/T
 3. In-game video is going to be converted to RGBA8 if it isn't already.
     Fallout 4 expects RGBA8. We therefor provide RGBA8. This means if your video is not RGBA8 (it isn't) we are going to do conversion. This has extreme implications for linear targets (IE, normal maps), and will reduce end-user visual quality, likely even with our highest quality conversion settings. If you are targeting linear targets, you will need to consider our conversion processes, if and until we decide to make a specialty conversion process.
 
+4. Your video will likely be cropped and/or warped.
+    Generally speaking, we do not do much UV-correction or remapping. There are some special usecases for TVs, but otherwise we just take the texture and substitute it with the video's. This means you must bare in mind UV mapping, and the effects it can and will have on your content, as well as any other weird effects. The workshop TVs are the easy example as you can toggle the three main effects via f4ffmpeg's toml.
+
 # Have any other suggestions?
 
 If you have some suggestions or questions feel free to reach out on the G.A.R.D.E.N. discord, or to make an issue. Do keep in mind that suggestions or feature requests made are not going to necessarily be considered or guaranteed for implementation. More importantly, I am currently working on this on my own, and am not some coding master; ChatGPT does a lot of the grunt work for me at the moment, and helps me with syntax. Pull requests are also appreciated.
