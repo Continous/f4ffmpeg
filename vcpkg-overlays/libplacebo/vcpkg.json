@@ -8,6 +8,7 @@
   "dependencies": [
     "shaderc",
     "spirv-cross",
+    "vulkan-headers",
     {
       "name": "pkgconf",
       "host": true
