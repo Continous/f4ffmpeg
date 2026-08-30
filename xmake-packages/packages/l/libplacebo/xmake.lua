@@ -142,9 +142,13 @@ package("libplacebo")
         -- corrupts paths like D:\a\f4ffmpeg before find_library() sees them.
         local shaderc_libdir =
             shaderc_dep:installdir("lib"):gsub("\\", "/")
+        local shaderc_incdir =
+            shaderc_dep:installdir("include"):gsub("\\", "/")
 
         local spirv_cross_libdir =
             spirv_cross_dep:installdir("lib"):gsub("\\", "/")
+        local spirv_cross_incdir =
+            spirv_cross_dep:installdir("include"):gsub("\\", "/")
 
         local glsl_meson =
             path.join(
@@ -175,9 +179,14 @@ package("libplacebo")
         )
 
         local shaderc_replacement =
-            "shaderc = cc.find_library('shaderc_combined', " ..
+            "shaderc_lib = cc.find_library('shaderc_combined', " ..
             "required: get_option('shaderc'), " ..
-            "dirs: '" .. shaderc_libdir .. "')"
+            "dirs: '" .. shaderc_libdir .. "')\n" ..
+            "shaderc = declare_dependency(\n" ..
+            "  dependencies: shaderc_lib,\n" ..
+            "  include_directories: ['" .. shaderc_incdir .. "'],\n" ..
+            "  version: '2024.1',\n" ..
+            ")"
 
         io.replace(
             glsl_meson,
@@ -191,7 +200,7 @@ package("libplacebo")
 
         assert(
             glsl_after:find(
-                "cc.find_library('shaderc_combined'",
+                "shaderc = declare_dependency(",
                 1,
                 true
             ),
@@ -223,26 +232,47 @@ package("libplacebo")
             "review the static SPIRV-Cross patch"
         )
 
-        local spirv_lookup =
-            "dependency('spirv-cross-c-shared',"
+        -- Replace the complete upstream dependency() expression. Doing only a
+        -- prefix replacement leaves dependency-only keywords such as
+        -- `version:` attached to cc.find_library(), which Meson rejects.
+        local spirv_pattern =
+            "spirv_cross%s*=%s*" ..
+            "dependency%('spirv%-cross%-c%-shared',%s*" ..
+            "version:%s*'[^']+',%s*" ..
+            "required:%s*get_option%('d3d11'%)%s*" ..
+            "%)"
 
         local spirv_replacement =
-            "cc.find_library('spirv-cross-c', " ..
-            "dirs: '" .. spirv_cross_libdir .. "',"
+            "spirv_cross_lib = cc.find_library('spirv-cross-c', " ..
+            "required: get_option('d3d11'), " ..
+            "dirs: '" .. spirv_cross_libdir .. "')\n" ..
+            "spirv_cross = declare_dependency(\n" ..
+            "  dependencies: spirv_cross_lib,\n" ..
+            "  include_directories: ['" .. spirv_cross_incdir .. "'],\n" ..
+            "  version: '0.57.0',\n" ..
+            ")"
 
-        io.replace(
-            d3d11_meson,
-            spirv_lookup,
-            spirv_replacement,
-            {plain = true}
+        local d3d_after, spirv_replacements =
+            d3d_before:gsub(
+                spirv_pattern,
+                spirv_replacement,
+                1
+            )
+
+        assert(
+            spirv_replacements == 1,
+            "failed to replace the complete libplacebo SPIRV-Cross " ..
+            "dependency expression"
         )
 
-        local d3d_after =
-            io.readfile(d3d11_meson)
+        io.writefile(
+            d3d11_meson,
+            d3d_after
+        )
 
         assert(
             d3d_after:find(
-                "cc.find_library('spirv-cross-c'",
+                "spirv_cross = declare_dependency(",
                 1,
                 true
             ),
@@ -260,7 +290,7 @@ package("libplacebo")
 
         print(
             "Patched libplacebo dependency discovery for static MSVC: " ..
-            "shaderc_combined.lib + spirv-cross-c.lib (no pkg-config)"
+            "shaderc_combined.lib + spirv-cross-c.lib + headers (no pkg-config)"
         )
 
         -- MSVC exposes C11 atomics only behind /experimental:c11atomics.
