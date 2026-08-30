@@ -6,9 +6,10 @@
 #   - clang-cl is used only for libplacebo itself
 #   - upstream Meson remains responsible for building libplacebo
 #
-# f4ffmpeg differs in one place: it needs the D3D11 backend and wants the
-# embedded route fully static, so libplacebo's SPIRV-Cross pkg-config lookup
-# is redirected from the shared C API name to vcpkg's static C API name.
+# f4ffmpeg builds both the D3D11 and Vulkan backends and wants the embedded
+# libplacebo route fully static. D3D11 needs vcpkg's static SPIRV-Cross C API;
+# Vulkan is compiled without a hard dependency on the Vulkan loader so the
+# caller may provide vkGetInstanceProcAddr dynamically at runtime.
 
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
@@ -103,7 +104,9 @@ set(LIBPLACEBO_MESON_OPTIONS
     -Dd3d11=enabled
     -Dshaderc=enabled
     -Dglslang=disabled
-    -Dvulkan=disabled
+    -Dvulkan=enabled
+    -Dvk-proc-addr=disabled
+    -Dvulkan-registry=${CURRENT_INSTALLED_DIR}/share/vulkan/registry/vk.xml
     -Dopengl=disabled
     -Ddovi=disabled
     -Dlibdovi=disabled
