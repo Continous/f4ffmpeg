@@ -460,20 +460,15 @@ namespace f4ffmpeg
                 imagePath.string();
         }
 
-        videoPlaybackSettings loadPlaybackSettings(
-            const std::filesystem::path& videoPath)
+        videoPlaybackSettings loadPlaybackSettingsFromIni(
+            const std::filesystem::path& iniPath)
         {
             videoPlaybackSettings settings{};
-
-            std::filesystem::path iniPath =
-                videoPath;
-
-            iniPath.replace_extension(".ini");
 
             std::error_code statusError;
 
             const bool exists =
-                std::filesystem::is_regular_file(
+                std::filesystem::exists(
                     iniPath,
                     statusError
                 );
@@ -490,6 +485,26 @@ namespace f4ffmpeg
             }
 
             if (!exists)
+                return settings;
+
+            const bool regularFile =
+                std::filesystem::is_regular_file(
+                    iniPath,
+                    statusError
+                );
+
+            if (statusError)
+            {
+                REX::WARN(
+                    "f4ffmpeg could not inspect playback INI '{}': {}.",
+                    iniPath.string(),
+                    statusError.message()
+                );
+
+                return settings;
+            }
+
+            if (!regularFile)
                 return settings;
 
             std::ifstream input(
@@ -718,6 +733,83 @@ namespace f4ffmpeg
                 );
             }
 
+            std::vector<std::string> validatedPlaylist;
+            validatedPlaylist.reserve(
+                settings.playlist.size()
+            );
+
+            for (const auto& entry : settings.playlist)
+            {
+                const std::filesystem::path entryPath{
+                    entry
+                };
+
+                if (!isSupportedVideoPath(entryPath))
+                {
+                    REX::WARN(
+                        "f4ffmpeg ignored unsupported playlist media '{}' from '{}'.",
+                        entry,
+                        iniPath.string()
+                    );
+
+                    continue;
+                }
+
+                std::error_code entryError;
+                const bool entryExists =
+                    std::filesystem::exists(
+                        entryPath,
+                        entryError
+                    );
+
+                if (entryError)
+                {
+                    REX::WARN(
+                        "f4ffmpeg could not inspect playlist media '{}' from '{}': {}.",
+                        entry,
+                        iniPath.string(),
+                        entryError.message()
+                    );
+
+                    continue;
+                }
+
+                if (!entryExists)
+                {
+                    REX::WARN(
+                        "f4ffmpeg ignored missing playlist media '{}' from '{}'.",
+                        entry,
+                        iniPath.string()
+                    );
+
+                    continue;
+                }
+
+                const bool regularEntry =
+                    std::filesystem::is_regular_file(
+                        entryPath,
+                        entryError
+                    );
+
+                if (entryError || !regularEntry)
+                {
+                    REX::WARN(
+                        "f4ffmpeg ignored non-file playlist media '{}' from '{}'.",
+                        entry,
+                        iniPath.string()
+                    );
+
+                    continue;
+                }
+
+                validatedPlaylist.emplace_back(
+                    entry
+                );
+            }
+
+            settings.playlist =
+                std::move(validatedPlaylist);
+
             if (
                 settings.transitionImage &&
                 settings.transition != transitionMethod::image)
@@ -752,6 +844,53 @@ namespace f4ffmpeg
             );
 
             return settings;
+        }
+
+        videoPlaybackSettings loadPlaybackSettingsForVideo(
+            const std::filesystem::path& videoPath)
+        {
+            std::filesystem::path iniPath =
+                videoPath;
+
+            iniPath.replace_extension(".ini");
+
+            return loadPlaybackSettingsFromIni(
+                iniPath
+            );
+        }
+
+        bool hasSupportedVideoSibling(
+            const std::filesystem::path& iniPath)
+        {
+            std::error_code statusError;
+
+            for (const auto extension :
+                 supportedVideoExtensions)
+            {
+                std::filesystem::path candidate =
+                    iniPath;
+
+                candidate.replace_extension(
+                    std::string{extension}
+                );
+
+                const bool exists =
+                    std::filesystem::is_regular_file(
+                        candidate,
+                        statusError
+                    );
+
+                if (statusError)
+                {
+                    statusError.clear();
+                    continue;
+                }
+
+                if (exists)
+                    return true;
+            }
+
+            return false;
         }
 
         bool isWorkshopTvRasterScanTexture(
@@ -799,7 +938,15 @@ namespace f4ffmpeg
             videoTargetMode mode =
                 videoTargetMode::vanillaOverride;
 
+            // Initial decoder source. For a standalone playlist this is the
+            // first playlist item, not the identity of the playback definition.
             std::string videoPath;
+
+            // Stable manager identity. Video-backed replacements use the video
+            // path; standalone playlists use the .ini path so a playlist may
+            // start with a video that is also independently indexed elsewhere.
+            std::string playbackKey;
+
             videoPlaybackSettings playbackSettings;
         };
 
@@ -810,6 +957,7 @@ namespace f4ffmpeg
 
             std::string texturePath;
             std::string videoPath;
+            std::string playbackKey;
             videoPlaybackSettings playbackSettings;
         };
 
@@ -824,7 +972,7 @@ namespace f4ffmpeg
         std::unordered_map<
             std::string,
             std::shared_ptr<manager>>
-            playbackByVideo;
+            playbackByIdentity;
 
         std::mutex dispatchMutex;
 
@@ -978,9 +1126,8 @@ namespace f4ffmpeg
                 *gameRoot / "Data" / "Video";
 
             REX::INFO(
-                "Scanning loose f4ffmpeg videos at '{}' "
-                "(supported containers: .mov, .mp4, .m4v, .mkv, .webm, "
-                ".avi, .wmv, .mpg, .mpeg, .ts, .m2ts, .ogv).",
+                "Scanning loose f4ffmpeg media at '{}' "
+                "(supported video containers plus standalone playlist INIs).",
                 root.string()
             );
 
@@ -993,7 +1140,7 @@ namespace f4ffmpeg
                 if (error)
                 {
                     REX::WARN(
-                        "Unable to inspect loose f4ffmpeg video directory '{}': {}.",
+                        "Unable to inspect loose f4ffmpeg media directory '{}': {}.",
                         root.string(),
                         error.message()
                     );
@@ -1001,7 +1148,7 @@ namespace f4ffmpeg
                 else
                 {
                     REX::INFO(
-                        "No loose f4ffmpeg video directory found at '{}'; "
+                        "No loose f4ffmpeg media directory found at '{}'; "
                         "replacement index is empty.",
                         root.string()
                     );
@@ -1012,6 +1159,9 @@ namespace f4ffmpeg
 
             std::vector<std::filesystem::path>
                 videoFiles;
+
+            std::vector<std::filesystem::path>
+                iniFiles;
 
             std::filesystem::recursive_directory_iterator iterator(
                 root,
@@ -1024,7 +1174,7 @@ namespace f4ffmpeg
             if (error)
             {
                 REX::WARN(
-                    "Unable to enumerate loose f4ffmpeg video directory '{}': {}.",
+                    "Unable to enumerate loose f4ffmpeg media directory '{}': {}.",
                     root.string(),
                     error.message()
                 );
@@ -1040,14 +1190,22 @@ namespace f4ffmpeg
                     iterator->is_regular_file(
                         statusError
                     ) &&
-                    !statusError &&
-                    isSupportedVideoPath(
-                        iterator->path()
-                    ))
+                    !statusError)
                 {
-                    videoFiles.emplace_back(
-                        iterator->path()
-                    );
+                    const auto& path =
+                        iterator->path();
+
+                    if (isSupportedVideoPath(path))
+                    {
+                        videoFiles.emplace_back(path);
+                    }
+                    else if (
+                        lowercasePath(
+                            path.extension().string()
+                        ) == ".ini")
+                    {
+                        iniFiles.emplace_back(path);
+                    }
                 }
 
                 iterator.increment(error);
@@ -1055,7 +1213,7 @@ namespace f4ffmpeg
                 if (error)
                 {
                     REX::WARN(
-                        "Error while enumerating loose f4ffmpeg videos: {}.",
+                        "Error while enumerating loose f4ffmpeg media: {}.",
                         error.message()
                     );
 
@@ -1063,108 +1221,206 @@ namespace f4ffmpeg
                 }
             }
 
-            std::sort(
-                videoFiles.begin(),
-                videoFiles.end(),
-                [](const auto& left, const auto& right)
+            const auto sortPaths =
+                [](auto& paths)
                 {
-                    return lowercasePath(
-                               left.generic_string()
-                           ) <
-                           lowercasePath(
-                               right.generic_string()
-                           );
-                }
-            );
+                    std::sort(
+                        paths.begin(),
+                        paths.end(),
+                        [](const auto& left, const auto& right)
+                        {
+                            return lowercasePath(
+                                       left.generic_string()
+                                   ) <
+                                   lowercasePath(
+                                       right.generic_string()
+                                   );
+                        }
+                    );
+                };
+
+            sortPaths(videoFiles);
+            sortPaths(iniFiles);
+
+            const auto relativeStemFor =
+                [&root](
+                    const std::filesystem::path& sourcePath
+                ) -> std::optional<std::string>
+                {
+                    auto relativePath =
+                        sourcePath.lexically_relative(
+                            root
+                        );
+
+                    if (
+                        relativePath.empty() ||
+                        startsWithInsensitive(
+                            relativePath.string(),
+                            ".."
+                        ))
+                    {
+                        REX::WARN(
+                            "Unable to derive f4ffmpeg replacement key for '{}'.",
+                            sourcePath.string()
+                        );
+
+                        return std::nullopt;
+                    }
+
+                    relativePath.replace_extension();
+
+                    std::string relativeStem =
+                        relativePath.string();
+
+                    std::replace(
+                        relativeStem.begin(),
+                        relativeStem.end(),
+                        '/',
+                        '\\'
+                    );
+
+                    return relativeStem;
+                };
+
+            const auto registerReplacementPair =
+                [](
+                    const std::string& relativeStem,
+                    const std::string& initialVideoPath,
+                    const std::string& playbackKey,
+                    const videoPlaybackSettings& playbackSettings)
+                {
+                    std::string textureStem{
+                        texturesPrefix
+                    };
+
+                    textureStem +=
+                        relativeStem;
+
+                    std::string vanillaTexture =
+                        textureStem;
+
+                    vanillaTexture +=
+                        ddsSuffix;
+
+                    std::string directTexture =
+                        textureStem;
+
+                    directTexture +=
+                        directSwapSuffix;
+
+                    registerIndexedReplacement(
+                        std::move(vanillaTexture),
+                        indexedVideoReplacement{
+                            videoTargetMode::vanillaOverride,
+                            initialVideoPath,
+                            playbackKey,
+                            playbackSettings
+                        }
+                    );
+
+                    registerIndexedReplacement(
+                        std::move(directTexture),
+                        indexedVideoReplacement{
+                            videoTargetMode::directTextureSwap,
+                            initialVideoPath,
+                            playbackKey,
+                            playbackSettings
+                        }
+                    );
+                };
 
             std::size_t activeVideos = 0;
+            std::size_t activePlaylists = 0;
 
+            // Existing behavior: a discovered video owns the replacement key and
+            // an optional same-stem INI augments its playback policy.
             for (const auto& videoPath : videoFiles)
             {
-                auto relativePath =
-                    videoPath.lexically_relative(
-                        root
-                    );
+                const auto relativeStem =
+                    relativeStemFor(videoPath);
 
-                if (
-                    relativePath.empty() ||
-                    startsWithInsensitive(
-                        relativePath.string(),
-                        ".."
-                    ))
-                {
-                    REX::WARN(
-                        "Unable to derive f4ffmpeg replacement key for '{}'.",
-                        videoPath.string()
-                    );
-
+                if (!relativeStem)
                     continue;
-                }
-
-                relativePath.replace_extension();
-
-                std::string relativeStem =
-                    relativePath.string();
-
-                std::replace(
-                    relativeStem.begin(),
-                    relativeStem.end(),
-                    '/',
-                    '\\'
-                );
 
                 const std::string physicalVideoPath =
                     videoPath.string();
 
                 const videoPlaybackSettings playbackSettings =
-                    loadPlaybackSettings(
+                    loadPlaybackSettingsForVideo(
                         videoPath
                     );
 
-                std::string textureStem{
-                    texturesPrefix
-                };
-
-                textureStem +=
-                    relativeStem;
-
-                std::string vanillaTexture =
-                    textureStem;
-
-                vanillaTexture +=
-                    ddsSuffix;
-
-                std::string directTexture =
-                    textureStem;
-
-                directTexture +=
-                    directSwapSuffix;
-
-                registerIndexedReplacement(
-                    std::move(vanillaTexture),
-                    indexedVideoReplacement{
-                        videoTargetMode::vanillaOverride,
-                        physicalVideoPath,
-                        playbackSettings
-                    }
-                );
-
-                registerIndexedReplacement(
-                    std::move(directTexture),
-                    indexedVideoReplacement{
-                        videoTargetMode::directTextureSwap,
-                        physicalVideoPath,
-                        playbackSettings
-                    }
+                registerReplacementPair(
+                    *relativeStem,
+                    physicalVideoPath,
+                    physicalVideoPath,
+                    playbackSettings
                 );
 
                 ++activeVideos;
             }
 
+            // A same-stem INI beside a supported video is already consumed as
+            // that video's sidecar above. Any other INI with playlist entries is
+            // itself a replacement definition: its filename supplies the texture
+            // key and its first playlist item supplies the initial decoder source.
+            for (const auto& iniPath : iniFiles)
+            {
+                if (hasSupportedVideoSibling(iniPath))
+                    continue;
+
+                const videoPlaybackSettings playbackSettings =
+                    loadPlaybackSettingsFromIni(
+                        iniPath
+                    );
+
+                if (playbackSettings.playlist.empty())
+                    continue;
+
+                const auto relativeStem =
+                    relativeStemFor(iniPath);
+
+                if (!relativeStem)
+                    continue;
+
+                const std::string initialVideoPath =
+                    playbackSettings.playlist.front();
+
+                if (!isSupportedVideoPath(
+                        std::filesystem::path{
+                            initialVideoPath
+                        }))
+                {
+                    REX::WARN(
+                        "f4ffmpeg standalone playlist '{}' has unsupported first media item '{}'; ignoring playlist replacement.",
+                        iniPath.string(),
+                        initialVideoPath
+                    );
+
+                    continue;
+                }
+
+                registerReplacementPair(
+                    *relativeStem,
+                    initialVideoPath,
+                    iniPath.string(),
+                    playbackSettings
+                );
+
+                ++activePlaylists;
+
+                REX::INFO(
+                    "f4ffmpeg indexed standalone playlist '{}' for texture stem '{}' with {} source(s).",
+                    iniPath.string(),
+                    *relativeStem,
+                    playbackSettings.playlist.size()
+                );
+            }
+
             REX::INFO(
-                "f4ffmpeg indexed {} loose video replacement(s) into {} "
-                "texture mapping(s); manager dispatch is deferred until game load.",
+                "f4ffmpeg indexed {} video-backed and {} playlist-backed replacement definition(s) into {} texture mapping(s); manager dispatch is deferred until game load.",
                 activeVideos,
+                activePlaylists,
                 replacementIndex.size()
             );
 
@@ -1207,6 +1463,7 @@ namespace f4ffmpeg
                 replacement->second.mode,
                 std::move(normalized),
                 replacement->second.videoPath,
+                replacement->second.playbackKey,
                 replacement->second.playbackSettings
             };
         }
@@ -3540,13 +3797,16 @@ namespace f4ffmpeg
         target->videoPath =
             resolved->videoPath;
 
+        target->playbackKey =
+            resolved->playbackKey;
+
         target->playbackSettings =
             resolved->playbackSettings;
 
         {
-            const std::string videoKey =
+            const std::string playbackKey =
                 lowercasePath(
-                    resolved->videoPath
+                    resolved->playbackKey
                 );
 
             std::scoped_lock playbackLock(
@@ -3554,10 +3814,10 @@ namespace f4ffmpeg
             );
 
             if (const auto playback =
-                    playbackByVideo.find(
-                        videoKey
+                    playbackByIdentity.find(
+                        playbackKey
                     );
-                playback != playbackByVideo.end())
+                playback != playbackByIdentity.end())
             {
                 target->playback =
                     playback->second;
@@ -3580,17 +3840,18 @@ namespace f4ffmpeg
 
         struct managerDispatchEntry
         {
+            std::string playbackKey;
             std::string videoPath;
             videoPlaybackSettings playbackSettings;
         };
 
         std::unordered_set<std::string>
-            videoKeys;
+            playbackKeys;
 
         std::vector<managerDispatchEntry>
-            videos;
+            definitions;
 
-        videoKeys.reserve(
+        playbackKeys.reserve(
             replacementIndex.size()
         );
 
@@ -3599,15 +3860,16 @@ namespace f4ffmpeg
         {
             (void)textureKey;
 
-            const std::string videoKey =
+            const std::string identityKey =
                 lowercasePath(
-                    replacement.videoPath
+                    replacement.playbackKey
                 );
 
-            if (videoKeys.emplace(videoKey).second)
+            if (playbackKeys.emplace(identityKey).second)
             {
-                videos.emplace_back(
+                definitions.emplace_back(
                     managerDispatchEntry{
+                        replacement.playbackKey,
                         replacement.videoPath,
                         replacement.playbackSettings
                     }
@@ -3615,26 +3877,29 @@ namespace f4ffmpeg
             }
         }
 
-        if (videos.empty())
+        if (definitions.empty())
         {
             REX::INFO(
-                "f4ffmpeg post-load manager dispatch found no indexed videos."
+                "f4ffmpeg post-load manager dispatch found no indexed playback definitions."
             );
 
             return true;
         }
 
-        std::size_t runningVideos = 0;
+        std::size_t runningDefinitions = 0;
         std::size_t newlyDispatched = 0;
 
-        for (const auto& video : videos)
+        for (const auto& definition : definitions)
         {
-            const std::string& videoPath =
-                video.videoPath;
+            const std::string& playbackKey =
+                definition.playbackKey;
 
-            const std::string videoKey =
+            const std::string& videoPath =
+                definition.videoPath;
+
+            const std::string identityKey =
                 lowercasePath(
-                    videoPath
+                    playbackKey
                 );
 
             std::shared_ptr<manager> playback;
@@ -3645,10 +3910,10 @@ namespace f4ffmpeg
                 );
 
                 if (const auto existing =
-                        playbackByVideo.find(
-                            videoKey
+                        playbackByIdentity.find(
+                            identityKey
                         );
-                    existing != playbackByVideo.end())
+                    existing != playbackByIdentity.end())
                 {
                     playback =
                         existing->second;
@@ -3660,13 +3925,14 @@ namespace f4ffmpeg
                 playback =
                     createManager(
                         videoPath.c_str(),
-                        video.playbackSettings
+                        definition.playbackSettings
                     );
 
                 if (!playback)
                 {
                     REX::WARN(
-                        "f4ffmpeg post-load dispatch could not start manager for '{}'.",
+                        "f4ffmpeg post-load dispatch could not start manager for playback definition '{}' (initial source '{}').",
+                        playbackKey,
                         videoPath
                     );
 
@@ -3678,8 +3944,8 @@ namespace f4ffmpeg
                         playbackRegistryMutex
                     );
 
-                    playbackByVideo.emplace(
-                        videoKey,
+                    playbackByIdentity.emplace(
+                        identityKey,
                         playback
                     );
                 }
@@ -3687,33 +3953,35 @@ namespace f4ffmpeg
                 ++newlyDispatched;
 
                 REX::INFO(
-                    "f4ffmpeg post-load dispatched manager for loose replacement '{}'.",
+                    "f4ffmpeg post-load dispatched manager for playback definition '{}' (initial source '{}').",
+                    playbackKey,
                     videoPath
                 );
             }
 
             playback->setLooping(
-                video.playbackSettings.looping
+                definition.playbackSettings.looping
             );
 
             if (
-                video.playbackSettings.shuffle ||
-                !video.playbackSettings.playlist.empty())
+                definition.playbackSettings.shuffle ||
+                !definition.playbackSettings.playlist.empty())
             {
                 REX::DEBUG(
-                    "f4ffmpeg playback policy for '{}': shuffle={} with {} additional playlist entry/entries.",
-                    videoPath,
-                    video.playbackSettings.shuffle,
-                    video.playbackSettings.playlist.size()
+                    "f4ffmpeg playback policy for '{}': shuffle={} with {} playlist entry/entries.",
+                    playbackKey,
+                    definition.playbackSettings.shuffle,
+                    definition.playbackSettings.playlist.size()
                 );
             }
 
-            ++runningVideos;
+            ++runningDefinitions;
 
             // A target may already be registered against Fallout's vanilla SRV
             // from loading activity that occurred before this post-load event.
-            // Attach playback now so that existing presentation bindings become
-            // live without requiring the texture to be requested again.
+            // Attach by playback identity, not initial video path: standalone
+            // playlists may legitimately begin with a video that is also used by
+            // another independently indexed replacement.
             std::scoped_lock targetLock(
                 targetRegistryMutex
             );
@@ -3726,8 +3994,8 @@ namespace f4ffmpeg
                 if (
                     !target ||
                     lowercasePath(
-                        target->videoPath
-                    ) != videoKey)
+                        target->playbackKey
+                    ) != identityKey)
                 {
                     continue;
                 }
@@ -3742,14 +4010,13 @@ namespace f4ffmpeg
         }
 
         REX::INFO(
-            "f4ffmpeg post-load manager dispatch complete: {} running, {} newly dispatched, {} indexed video(s).",
-            runningVideos,
+            "f4ffmpeg post-load manager dispatch complete: {} running, {} newly dispatched, {} indexed playback definition(s).",
+            runningDefinitions,
             newlyDispatched,
-            videos.size()
+            definitions.size()
         );
 
-        return runningVideos ==
-            videos.size();
+        return true;
     }
 
     bool initializeNifHandler()

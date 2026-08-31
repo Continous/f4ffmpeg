@@ -75,6 +75,7 @@ namespace f4ffmpeg
 
         std::string texturePath;
         std::string videoPath;
+        std::string playbackKey;
         videoPlaybackSettings playbackSettings;
 
         mutable std::shared_mutex playbackMutex;
@@ -97,16 +98,18 @@ namespace f4ffmpeg
     );
 
     // Requires Fallout graphics to already be initialized. Scans supported
-    // loose FFmpeg video containers beneath Data\Video, builds both vanilla
-    // and *_video.dds mappings,
+    // loose FFmpeg video containers plus standalone playlist INIs beneath
+    // Data\Video, builds both vanilla and *_video.dds mappings,
     // and installs BSShaderTextureSet plus BSEffectShaderProperty base-texture
     // discovery adapters feeding the common D3D11 presentation hook. No
     // decoder/producer managers are started here.
     bool initializeNifHandler();
 
-    // Starts one manager per indexed physical video using its parsed playback policy. Intended to be
-    // called only after a successful game load (F4SE kPostLoadGame). Safe to
-    // call more than once; already-running videos are reused and failed starts
+    // Starts one manager per indexed playback definition using its parsed
+    // playback policy. Video-backed definitions are identified by video path;
+    // standalone playlists are identified by INI path. Intended to be called
+    // only after a successful game load (F4SE kPostLoadGame). Safe to call more
+    // than once; already-running definitions are reused and failed starts
     // may be retried by a later call.
     bool dispatchVideoManagers();
 }
