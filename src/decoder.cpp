@@ -990,6 +990,16 @@ decoder::frameProduce(
     return output;
 }
 
+bool decoder::frameDump(
+    const producedFrame& frame,
+    const char* outputPath)
+{
+    return dumpProducedFrame(
+        frame,
+        outputPath
+    );
+}
+
 producedFrame::~producedFrame()
 {
     if (resourceView != nullptr)

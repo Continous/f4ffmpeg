@@ -108,4 +108,12 @@ namespace f4ffmpeg
         const char* inputPath,
         videoPlaybackSettings settings = {}
     );
+
+    // Source-compatibility shim for pre-playlist call sites. The bool retains
+    // its historical meaning (single-source looping) and is immediately
+    // translated into the canonical settings object.
+    std::shared_ptr<manager> createManager(
+        const char* inputPath,
+        bool looping
+    );
 }

@@ -96,6 +96,13 @@ namespace f4ffmpeg
         std::shared_ptr<producedFrame>
         frameProduce(const AVFrame* frame);
 
+        // Retained for the existing debug/test path. Production frame dumping
+        // internally uses the same canonical D3D11 staging helper.
+        bool frameDump(
+            const producedFrame& frame,
+            const char* outputPath
+        );
+
         bool initializeVideoDecoder();
 
         decodeResult decodeNextFrame(

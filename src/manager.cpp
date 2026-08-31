@@ -658,4 +658,17 @@ std::shared_ptr<manager> createManager(
     return newManager;
 }
 
+std::shared_ptr<manager> createManager(
+    const char* inputPath,
+    bool looping)
+{
+    videoPlaybackSettings settings{};
+    settings.looping = looping;
+
+    return createManager(
+        inputPath,
+        std::move(settings)
+    );
+}
+
 }
