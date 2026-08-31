@@ -53,6 +53,23 @@ jobs:
         with:
           xmake-version: latest
 
+      - name: verify optional-backend sources
+        run: |
+          $required = @(
+            ".\backends\placebo\placeboBackend.cpp",
+            ".\backends\placebo\placeboLibav.c",
+            ".\src\placeboBackendApi.h",
+            ".\tools\placebo-loader-smoke.cpp"
+          )
+
+          $missing = @(
+            $required | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) }
+          )
+
+          if ($missing.Count -ne 0) {
+            throw "Required optional-backend source file(s) missing from checkout: $($missing -join ', ')"
+          }
+
       - name: build core without libplacebo package
         run: |
           xmake config -y -vD `
@@ -71,11 +88,14 @@ jobs:
             --toolchain=msvc `
             --libplacebo_mode=static
 
-      - name: build core and backend
-        run: |
-          xmake build -y -vD f4ffmpeg
-          xmake build -y -vD f4ffmpeg_placebo
-          xmake build -y -vD placebo-loader-smoke
+      - name: build core with static-backend configuration
+        run: xmake build -y -vD f4ffmpeg
+
+      - name: build optional libplacebo backend
+        run: xmake build -y -vD f4ffmpeg_placebo
+
+      - name: build backend loader smoke test
+        run: xmake build -y -vD placebo-loader-smoke
 
       - name: smoke-load optional backend
         run: |

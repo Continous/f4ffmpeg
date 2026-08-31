@@ -55,10 +55,27 @@ local placebo_mode =
 if placebo_mode == "static" then
     -- vcpkg owns libplacebo's Meson/tool/dependency environment. The repository
     -- overlay builds libplacebo itself with clang-cl while f4ffmpeg remains MSVC.
+    --
+    -- libplacebo is installed as a static archive. Xmake's generic vcpkg package
+    -- discovery does not reliably propagate the private dependency closure from
+    -- libplacebo.pc, so make the two non-system static dependencies explicit for
+    -- the companion target as well.
     add_requires(
         "vcpkg::libplacebo",
         {
             alias = "f4ffmpeg-libplacebo"
+        }
+    )
+    add_requires(
+        "vcpkg::shaderc",
+        {
+            alias = "f4ffmpeg-shaderc"
+        }
+    )
+    add_requires(
+        "vcpkg::spirv-cross",
+        {
+            alias = "f4ffmpeg-spirv-cross"
         }
     )
 elseif placebo_mode == "auto" then
@@ -66,6 +83,20 @@ elseif placebo_mode == "auto" then
         "vcpkg::libplacebo",
         {
             alias = "f4ffmpeg-libplacebo",
+            optional = true
+        }
+    )
+    add_requires(
+        "vcpkg::shaderc",
+        {
+            alias = "f4ffmpeg-shaderc",
+            optional = true
+        }
+    )
+    add_requires(
+        "vcpkg::spirv-cross",
+        {
+            alias = "f4ffmpeg-spirv-cross",
             optional = true
         }
     )
@@ -112,7 +143,12 @@ target_end()
 
 local build_placebo_backend =
     placebo_mode == "static" or
-    (placebo_mode == "auto" and has_package("f4ffmpeg-libplacebo"))
+    (
+        placebo_mode == "auto" and
+        has_package("f4ffmpeg-libplacebo") and
+        has_package("f4ffmpeg-shaderc") and
+        has_package("f4ffmpeg-spirv-cross")
+    )
 
 if build_placebo_backend then
     target("f4ffmpeg_placebo")
@@ -129,12 +165,28 @@ if build_placebo_backend then
 
         -- The companion owns the hard libplacebo link. libplacebo itself is
         -- static here, so f4ffmpeg_placebo.dll is the only optional runtime
-        -- component that core needs to probe.
-        add_packages("ffmpeg", "f4ffmpeg-libplacebo")
+        -- component that core needs to probe. Keep the static dependency
+        -- closure explicit: shaderc and SPIRV-Cross are private libplacebo
+        -- dependencies, while shlwapi/version are Windows system dependencies
+        -- used by libplacebo's common and D3D11 code.
+        add_packages(
+            "ffmpeg",
+            "f4ffmpeg-libplacebo",
+            "f4ffmpeg-shaderc",
+            "f4ffmpeg-spirv-cross"
+        )
         add_defines("PL_STATIC")
-        add_links("d3d11", "dxgi")
+        add_syslinks("d3d11", "dxgi", "shlwapi", "version")
     target_end()
 end
+
+local placebo_smoke_source =
+    path.join(os.projectdir(), "tools", "placebo-loader-smoke.cpp")
+
+assert(
+    os.isfile(placebo_smoke_source),
+    "required source tools/placebo-loader-smoke.cpp is missing from the checkout"
+)
 
 target("placebo-loader-smoke")
     set_kind("binary")
