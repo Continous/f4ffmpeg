@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -58,6 +59,17 @@ namespace f4ffmpeg
             return playbackSettings.playlist;
         }
 
+        const std::string& getPlaybackKey() const noexcept
+        {
+            return playbackKey;
+        }
+
+        // Internal lazy-activation handoff. Safe to call from the activation
+        // worker while render threads concurrently query presentation state.
+        void attachPlayback(
+            std::shared_ptr<manager> newPlayback
+        );
+
         std::shared_ptr<const producedFrame>
         getLatestFrame() const;
 
@@ -68,7 +80,6 @@ namespace f4ffmpeg
         friend std::shared_ptr<const videoTarget>
         getVideoTargetForTexture(const char* texturePath);
 
-        friend bool dispatchVideoManagers();
 
         videoTargetMode mode =
             videoTargetMode::vanillaOverride;
@@ -77,6 +88,8 @@ namespace f4ffmpeg
         std::string videoPath;
         std::string playbackKey;
         videoPlaybackSettings playbackSettings;
+
+        std::atomic_bool activationRequestIssued = false;
 
         mutable std::shared_mutex playbackMutex;
         std::shared_ptr<manager> playback;
@@ -89,9 +102,10 @@ namespace f4ffmpeg
         const char* texturePath
     );
 
-    // Returns the target associated with a texture. The target may exist before
-    // its manager is dispatched; until then getLatestFrame() returns nullptr and
-    // Fallout's vanilla presentation remains active.
+    // Returns the target associated with a texture and queues that playback
+    // definition for lazy asynchronous activation. Until its manager is ready,
+    // getLatestFrame() returns nullptr and Fallout's vanilla presentation remains
+    // active. No decoder initialization occurs on the calling/render thread.
     std::shared_ptr<const videoTarget>
     getVideoTargetForTexture(
         const char* texturePath
@@ -105,11 +119,10 @@ namespace f4ffmpeg
     // decoder/producer managers are started here.
     bool initializeNifHandler();
 
-    // Starts one manager per indexed playback definition using its parsed
-    // playback policy. Video-backed definitions are identified by video path;
-    // standalone playlists are identified by INI path. Intended to be called
-    // only after a successful game load (F4SE kPostLoadGame). Safe to call more
-    // than once; already-running definitions are reused and failed starts
-    // may be retried by a later call.
+    // Arms lazy manager activation after a successful game load (F4SE
+    // kPostLoadGame). This does not start any decoder by itself. Playback
+    // definitions are activated asynchronously only after a mapped texture is
+    // actually requested. The historical name is retained for source
+    // compatibility with the existing main.cpp post-load call site.
     bool dispatchVideoManagers();
 }

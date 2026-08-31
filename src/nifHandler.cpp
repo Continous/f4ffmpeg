@@ -9,6 +9,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
@@ -19,6 +21,7 @@
 #include <shared_mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -75,7 +78,7 @@ namespace f4ffmpeg
                 ".ogv"
             };
 
-        // Playlist transition images are pre-decoded once at manager dispatch.
+        // Playlist transition images are pre-decoded once when that manager is lazily activated.
         // Deliberately exclude video containers: Image is a static decoder-gap
         // fallback, not authored transition media.
         constexpr std::array<std::string_view, 7>
@@ -974,7 +977,41 @@ namespace f4ffmpeg
             std::shared_ptr<manager>>
             playbackByIdentity;
 
-        std::mutex dispatchMutex;
+        enum class managerActivationState : std::uint8_t
+        {
+            dormant,
+            queued,
+            activating,
+            active,
+            failed
+        };
+
+        struct managerActivationRecord
+        {
+            std::string playbackKey;
+            std::string videoPath;
+            videoPlaybackSettings playbackSettings;
+            std::atomic<managerActivationState> state =
+                managerActivationState::dormant;
+        };
+
+        std::mutex activationRegistryMutex;
+        std::unordered_map<
+            std::string,
+            std::shared_ptr<managerActivationRecord>>
+            activationByIdentity;
+
+        std::mutex activationQueueMutex;
+        std::condition_variable activationQueueCv;
+        std::deque<std::shared_ptr<managerActivationRecord>>
+            activationQueue;
+        std::thread activationWorker;
+        bool activationEnabled = false;
+        bool activationStopRequested = false;
+
+        void requestPlaybackActivation(
+            std::string_view playbackKey);
+        void activationWorkerMain();
 
         void registerIndexedReplacement(
             std::string textureKey,
@@ -1417,8 +1454,45 @@ namespace f4ffmpeg
                 );
             }
 
+            {
+                std::scoped_lock activationLock(
+                    activationRegistryMutex
+                );
+
+                activationByIdentity.clear();
+
+                for (const auto& [textureKey, replacement] :
+                     replacementIndex)
+                {
+                    (void)textureKey;
+
+                    const std::string identityKey =
+                        lowercasePath(
+                            replacement.playbackKey
+                        );
+
+                    if (activationByIdentity.contains(identityKey))
+                        continue;
+
+                    auto record =
+                        std::make_shared<managerActivationRecord>();
+
+                    record->playbackKey =
+                        replacement.playbackKey;
+                    record->videoPath =
+                        replacement.videoPath;
+                    record->playbackSettings =
+                        replacement.playbackSettings;
+
+                    activationByIdentity.emplace(
+                        identityKey,
+                        std::move(record)
+                    );
+                }
+            }
+
             REX::INFO(
-                "f4ffmpeg indexed {} video-backed and {} playlist-backed replacement definition(s) into {} texture mapping(s); manager dispatch is deferred until game load.",
+                "f4ffmpeg indexed {} video-backed and {} playlist-backed replacement definition(s) into {} texture mapping(s); decoder activation is lazy and deferred until a mapped texture is requested after game load.",
                 activeVideos,
                 activePlaylists,
                 replacementIndex.size()
@@ -1474,6 +1548,220 @@ namespace f4ffmpeg
             std::string,
             std::shared_ptr<videoTarget>>
             targetsByTexture;
+
+        void requestPlaybackActivation(
+            std::string_view playbackKey)
+        {
+            if (playbackKey.empty())
+                return;
+
+            const std::string identityKey =
+                lowercasePath(playbackKey);
+
+            std::shared_ptr<managerActivationRecord> record;
+
+            {
+                std::scoped_lock activationLock(
+                    activationRegistryMutex
+                );
+
+                const auto existing =
+                    activationByIdentity.find(identityKey);
+
+                if (existing == activationByIdentity.end())
+                    return;
+
+                record = existing->second;
+            }
+
+            auto expected =
+                managerActivationState::dormant;
+
+            if (!record->state.compare_exchange_strong(
+                    expected,
+                    managerActivationState::queued,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire))
+            {
+                return;
+            }
+
+            {
+                std::scoped_lock queueLock(
+                    activationQueueMutex
+                );
+
+                activationQueue.emplace_back(record);
+            }
+
+            REX::DEBUG(
+                "f4ffmpeg queued lazy manager activation for playback definition '{}' (initial source '{}').",
+                record->playbackKey,
+                record->videoPath
+            );
+
+            activationQueueCv.notify_one();
+        }
+
+        void activationWorkerMain()
+        {
+            REX::INFO(
+                "f4ffmpeg lazy manager activation worker started."
+            );
+
+            while (true)
+            {
+                std::shared_ptr<managerActivationRecord> record;
+
+                {
+                    std::unique_lock queueLock(
+                        activationQueueMutex
+                    );
+
+                    activationQueueCv.wait(
+                        queueLock,
+                        []()
+                        {
+                            return activationStopRequested ||
+                                (activationEnabled &&
+                                 !activationQueue.empty());
+                        }
+                    );
+
+                    if (activationStopRequested)
+                        break;
+
+                    record = activationQueue.front();
+                    activationQueue.pop_front();
+                }
+
+                if (!record)
+                    continue;
+
+                auto expected =
+                    managerActivationState::queued;
+
+                if (!record->state.compare_exchange_strong(
+                        expected,
+                        managerActivationState::activating,
+                        std::memory_order_acq_rel,
+                        std::memory_order_acquire))
+                {
+                    continue;
+                }
+
+                const std::string identityKey =
+                    lowercasePath(record->playbackKey);
+
+                std::shared_ptr<manager> playback;
+
+                {
+                    std::scoped_lock playbackLock(
+                        playbackRegistryMutex
+                    );
+
+                    if (const auto existing =
+                            playbackByIdentity.find(identityKey);
+                        existing != playbackByIdentity.end())
+                    {
+                        playback = existing->second;
+                    }
+                }
+
+                if (!playback)
+                {
+                    playback =
+                        createManager(
+                            record->videoPath.c_str(),
+                            record->playbackSettings
+                        );
+                }
+
+                if (!playback)
+                {
+                    record->state.store(
+                        managerActivationState::failed,
+                        std::memory_order_release
+                    );
+
+                    REX::WARN(
+                        "f4ffmpeg lazy activation could not start manager for playback definition '{}' (initial source '{}'); vanilla texture presentation will remain active.",
+                        record->playbackKey,
+                        record->videoPath
+                    );
+
+                    continue;
+                }
+
+                {
+                    std::scoped_lock playbackLock(
+                        playbackRegistryMutex
+                    );
+
+                    playbackByIdentity[identityKey] =
+                        playback;
+                }
+
+                {
+                    std::scoped_lock targetLock(
+                        targetRegistryMutex
+                    );
+
+                    for (auto& [textureKey, target] :
+                         targetsByTexture)
+                    {
+                        (void)textureKey;
+
+                        if (
+                            !target ||
+                            lowercasePath(target->getPlaybackKey()) !=
+                                identityKey)
+                        {
+                            continue;
+                        }
+
+                        target->attachPlayback(
+                            playback
+                        );
+                    }
+                }
+
+                record->state.store(
+                    managerActivationState::active,
+                    std::memory_order_release
+                );
+
+                REX::INFO(
+                    "f4ffmpeg lazily activated manager for playback definition '{}' (initial source '{}').",
+                    record->playbackKey,
+                    record->videoPath
+                );
+            }
+
+        }
+
+        struct activationWorkerLifetime
+        {
+            ~activationWorkerLifetime()
+            {
+                {
+                    std::scoped_lock queueLock(
+                        activationQueueMutex
+                    );
+
+                    activationStopRequested = true;
+                }
+
+                activationQueueCv.notify_all();
+
+                if (activationWorker.joinable())
+                {
+                    activationWorker.join();
+                }
+            }
+        };
+
+        activationWorkerLifetime activationLifetime;
 
         using textureType =
             RE::BSShaderProperty::TextureTypeEnum;
@@ -3695,6 +3983,17 @@ namespace f4ffmpeg
         }
     }
 
+    void videoTarget::attachPlayback(
+        std::shared_ptr<manager> newPlayback)
+    {
+        std::unique_lock lock(
+            playbackMutex
+        );
+
+        playback =
+            std::move(newPlayback);
+    }
+
     std::shared_ptr<const producedFrame>
     videoTarget::getLatestFrame() const
     {
@@ -3778,13 +4077,21 @@ namespace f4ffmpeg
                 );
             existing != targetsByTexture.end())
         {
+            if (!existing->second->activationRequestIssued.exchange(
+                    true,
+                    std::memory_order_acq_rel))
+            {
+                requestPlaybackActivation(
+                    existing->second->playbackKey
+                );
+            }
+
             return existing->second;
         }
 
-        // Targets may be discovered before post-load manager dispatch. Keep
-        // the binding alive with a null playback pointer; dispatchVideoManagers()
-        // attaches the manager later without requiring Bethesda to reacquire the
-        // texture.
+        // Target creation is cheap and decoder-free. The first mapped texture
+        // request queues its playback definition for asynchronous activation;
+        // until that manager is ready, Fallout keeps presenting the vanilla SRV.
         auto target =
             std::make_shared<videoTarget>();
 
@@ -3829,191 +4136,59 @@ namespace f4ffmpeg
             target
         );
 
+        target->activationRequestIssued.store(
+            true,
+            std::memory_order_release
+        );
+
+        requestPlaybackActivation(
+            target->playbackKey
+        );
+
         return target;
     }
 
     bool dispatchVideoManagers()
     {
-        std::scoped_lock dispatchLock(
-            dispatchMutex
-        );
+        std::size_t indexedDefinitions = 0;
 
-        struct managerDispatchEntry
         {
-            std::string playbackKey;
-            std::string videoPath;
-            videoPlaybackSettings playbackSettings;
-        };
+            std::scoped_lock activationLock(
+                activationRegistryMutex
+            );
 
-        std::unordered_set<std::string>
-            playbackKeys;
+            indexedDefinitions =
+                activationByIdentity.size();
+        }
 
-        std::vector<managerDispatchEntry>
-            definitions;
+        std::size_t queuedDefinitions = 0;
+        bool startedWorker = false;
 
-        playbackKeys.reserve(
-            replacementIndex.size()
-        );
-
-        for (const auto& [textureKey, replacement] :
-             replacementIndex)
         {
-            (void)textureKey;
+            std::scoped_lock queueLock(
+                activationQueueMutex
+            );
 
-            const std::string identityKey =
-                lowercasePath(
-                    replacement.playbackKey
-                );
+            activationEnabled = true;
+            queuedDefinitions =
+                activationQueue.size();
 
-            if (playbackKeys.emplace(identityKey).second)
+            if (!activationWorker.joinable())
             {
-                definitions.emplace_back(
-                    managerDispatchEntry{
-                        replacement.playbackKey,
-                        replacement.videoPath,
-                        replacement.playbackSettings
-                    }
-                );
+                activationStopRequested = false;
+                activationWorker =
+                    std::thread(activationWorkerMain);
+                startedWorker = true;
             }
         }
 
-        if (definitions.empty())
-        {
-            REX::INFO(
-                "f4ffmpeg post-load manager dispatch found no indexed playback definitions."
-            );
-
-            return true;
-        }
-
-        std::size_t runningDefinitions = 0;
-        std::size_t newlyDispatched = 0;
-
-        for (const auto& definition : definitions)
-        {
-            const std::string& playbackKey =
-                definition.playbackKey;
-
-            const std::string& videoPath =
-                definition.videoPath;
-
-            const std::string identityKey =
-                lowercasePath(
-                    playbackKey
-                );
-
-            std::shared_ptr<manager> playback;
-
-            {
-                std::scoped_lock playbackLock(
-                    playbackRegistryMutex
-                );
-
-                if (const auto existing =
-                        playbackByIdentity.find(
-                            identityKey
-                        );
-                    existing != playbackByIdentity.end())
-                {
-                    playback =
-                        existing->second;
-                }
-            }
-
-            if (!playback)
-            {
-                playback =
-                    createManager(
-                        videoPath.c_str(),
-                        definition.playbackSettings
-                    );
-
-                if (!playback)
-                {
-                    REX::WARN(
-                        "f4ffmpeg post-load dispatch could not start manager for playback definition '{}' (initial source '{}').",
-                        playbackKey,
-                        videoPath
-                    );
-
-                    continue;
-                }
-
-                {
-                    std::scoped_lock playbackLock(
-                        playbackRegistryMutex
-                    );
-
-                    playbackByIdentity.emplace(
-                        identityKey,
-                        playback
-                    );
-                }
-
-                ++newlyDispatched;
-
-                REX::INFO(
-                    "f4ffmpeg post-load dispatched manager for playback definition '{}' (initial source '{}').",
-                    playbackKey,
-                    videoPath
-                );
-            }
-
-            playback->setLooping(
-                definition.playbackSettings.looping
-            );
-
-            if (
-                definition.playbackSettings.shuffle ||
-                !definition.playbackSettings.playlist.empty())
-            {
-                REX::DEBUG(
-                    "f4ffmpeg playback policy for '{}': shuffle={} with {} playlist entry/entries.",
-                    playbackKey,
-                    definition.playbackSettings.shuffle,
-                    definition.playbackSettings.playlist.size()
-                );
-            }
-
-            ++runningDefinitions;
-
-            // A target may already be registered against Fallout's vanilla SRV
-            // from loading activity that occurred before this post-load event.
-            // Attach by playback identity, not initial video path: standalone
-            // playlists may legitimately begin with a video that is also used by
-            // another independently indexed replacement.
-            std::scoped_lock targetLock(
-                targetRegistryMutex
-            );
-
-            for (auto& [textureKey, target] :
-                 targetsByTexture)
-            {
-                (void)textureKey;
-
-                if (
-                    !target ||
-                    lowercasePath(
-                        target->playbackKey
-                    ) != identityKey)
-                {
-                    continue;
-                }
-
-                std::unique_lock playbackLock(
-                    target->playbackMutex
-                );
-
-                target->playback =
-                    playback;
-            }
-        }
+        activationQueueCv.notify_all();
 
         REX::INFO(
-            "f4ffmpeg post-load manager dispatch complete: {} running, {} newly dispatched, {} indexed playback definition(s).",
-            runningDefinitions,
-            newlyDispatched,
-            definitions.size()
+            "f4ffmpeg post-load lazy manager activation armed: {} indexed playback definition(s), {} already requested/queued, worker {}.",
+            indexedDefinitions,
+            queuedDefinitions,
+            startedWorker ? "started" : "already running"
         );
 
         return true;

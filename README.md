@@ -33,13 +33,10 @@ Replacement targets will mirror their actual texture names but instead of Data/T
 1. Keep resolution reasonable.
     FFMPEG is _very_ efficient, but it is still video decoding. Consider keeping your video resolution at approximately half typical texture resolution size. IE, 2K resolution packs should target 1080p video, 4K resolution packs 2160p (ironically 4K) video. Most modern GPUs can handle quite a few 1080p streams, but many 4K streams can be a bit of a gamble on lower end hardware. Moreover, if we cannot establish hardware decoding 4K will _hammer_ the CPU.
 
-2. Do not change video resolution if you can help it.
-    F4ffmpeg does most of the "magic" by targeting a specific texture resolution. We currently generate that texture resolution based on the video resolution. Typically speaking this is fine...but if you change the resolution we will be forced to change _our_ texture resolution. This will not cause some lag, it will entirely lock up the Fallout 4 renderer until we can re-establish the texture. That can be up to a full second. We _could_ eventually target a specific texture resolution and rescale the video to that, but that has it's own implications, and requires smart user configuration of their toml or worse startup profiling. At the moment this minimizes our footprint however, and I prefer it.
+2. In-game video is going to be converted to RGBA8 if it isn't already.
+    Fallout 4 expects RGBA8. We therefor provide RGBA8. This means if your video is not RGBA8 (it isn't) we are going to do conversion. This has extreme implications for linear targets (IE, normal maps), and will reduce end-user visual quality, likely even with our highest quality conversion settings. If you are targeting linear targets, you will need to consider our conversion processes.
 
-3. In-game video is going to be converted to RGBA8 if it isn't already.
-    Fallout 4 expects RGBA8. We therefor provide RGBA8. This means if your video is not RGBA8 (it isn't) we are going to do conversion. This has extreme implications for linear targets (IE, normal maps), and will reduce end-user visual quality, likely even with our highest quality conversion settings. If you are targeting linear targets, you will need to consider our conversion processes, if and until we decide to make a specialty conversion process.
-
-4. Your video will likely be cropped and/or warped.
+3. Your video will likely be cropped and/or warped.
     Generally speaking, we do not do much UV-correction or remapping. There are some special usecases for TVs, but otherwise we just take the texture and substitute it with the video's. This means you must bare in mind UV mapping, and the effects it can and will have on your content, as well as any other weird effects. The workshop TVs are the easy example as you can toggle the three main effects via f4ffmpeg's toml.
 
 # Have any other suggestions?
