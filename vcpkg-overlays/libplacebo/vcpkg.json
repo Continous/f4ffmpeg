@@ -6,9 +6,8 @@
   "license": "LGPL-2.1-or-later",
   "supports": "windows & !uwp & !xbox",
   "dependencies": [
-    "shaderc",
+    "glslang",
     "spirv-cross",
-    "vulkan-headers",
     {
       "name": "pkgconf",
       "host": true

@@ -58,8 +58,9 @@ if placebo_mode == "static" then
     --
     -- libplacebo is installed as a static archive. Xmake's generic vcpkg package
     -- discovery does not reliably propagate the private dependency closure from
-    -- libplacebo.pc, so make the two non-system static dependencies explicit for
-    -- the companion target as well.
+    -- libplacebo.pc, so make the non-system static dependencies explicit for the
+    -- companion target as well. The repository port uses glslang directly rather
+    -- than shaderc to avoid the shaderc 2026.2 compiler-crash regression implicated by the first-render failure.
     add_requires(
         "vcpkg::libplacebo",
         {
@@ -67,9 +68,9 @@ if placebo_mode == "static" then
         }
     )
     add_requires(
-        "vcpkg::shaderc",
+        "vcpkg::glslang",
         {
-            alias = "f4ffmpeg-shaderc"
+            alias = "f4ffmpeg-glslang"
         }
     )
     add_requires(
@@ -87,9 +88,9 @@ elseif placebo_mode == "auto" then
         }
     )
     add_requires(
-        "vcpkg::shaderc",
+        "vcpkg::glslang",
         {
-            alias = "f4ffmpeg-shaderc",
+            alias = "f4ffmpeg-glslang",
             optional = true
         }
     )
@@ -146,7 +147,7 @@ local build_placebo_backend =
     (
         placebo_mode == "auto" and
         has_package("f4ffmpeg-libplacebo") and
-        has_package("f4ffmpeg-shaderc") and
+        has_package("f4ffmpeg-glslang") and
         has_package("f4ffmpeg-spirv-cross")
     )
 
@@ -166,13 +167,13 @@ if build_placebo_backend then
         -- The companion owns the hard libplacebo link. libplacebo itself is
         -- static here, so f4ffmpeg_placebo.dll is the only optional runtime
         -- component that core needs to probe. Keep the static dependency
-        -- closure explicit: shaderc and SPIRV-Cross are private libplacebo
+        -- closure explicit: glslang and SPIRV-Cross are private libplacebo
         -- dependencies, while shlwapi/version are Windows system dependencies
         -- used by libplacebo's common and D3D11 code.
         add_packages(
             "ffmpeg",
             "f4ffmpeg-libplacebo",
-            "f4ffmpeg-shaderc",
+            "f4ffmpeg-glslang",
             "f4ffmpeg-spirv-cross"
         )
         add_defines("PL_STATIC")
@@ -185,4 +186,13 @@ target("placebo-loader-smoke")
     set_default(false)
     add_files("tools/placebo-loader-smoke.cpp")
     add_includedirs("src")
+target_end()
+
+target("placebo-render-smoke")
+    set_kind("binary")
+    set_default(false)
+    add_files("tools/placebo-render-smoke.cpp")
+    add_includedirs("src")
+    add_packages("ffmpeg")
+    add_syslinks("d3d11")
 target_end()

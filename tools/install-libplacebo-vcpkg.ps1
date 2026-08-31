@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Triplet = "x64-windows-static"
+    [string]$Triplet = "x64-windows-static-md"
 )
 
 $ErrorActionPreference = "Stop"

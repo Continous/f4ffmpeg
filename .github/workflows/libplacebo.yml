@@ -12,6 +12,7 @@ on:
       - "src/placeboBackend*.cpp"
       - "backends/placebo/**"
       - "tools/placebo-loader-smoke.cpp"
+      - "tools/placebo-render-smoke.cpp"
       - "vcpkg-overlays/libplacebo/**"
       - "tools/install-libplacebo-vcpkg.ps1"
   pull_request:
@@ -24,13 +25,14 @@ on:
       - "src/placeboBackend*.cpp"
       - "backends/placebo/**"
       - "tools/placebo-loader-smoke.cpp"
+      - "tools/placebo-render-smoke.cpp"
       - "vcpkg-overlays/libplacebo/**"
       - "tools/install-libplacebo-vcpkg.ps1"
 
 env:
   VCPKG_ROOT: C:\vcpkg
   VCPKG_OVERLAY_PORTS: ${{ github.workspace }}\vcpkg-overlays
-  VCPKG_DEFAULT_TRIPLET: x64-windows-static
+  VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
   VCPKG_DEFAULT_HOST_TRIPLET: x64-windows
 
 jobs:
@@ -59,7 +61,8 @@ jobs:
             ".\backends\placebo\placeboBackend.cpp",
             ".\backends\placebo\placeboLibav.c",
             ".\src\placeboBackendApi.h",
-            ".\tools\placebo-loader-smoke.cpp"
+            ".\tools\placebo-loader-smoke.cpp",
+            ".\tools\placebo-render-smoke.cpp"
           )
 
           $missing = @(
@@ -97,6 +100,9 @@ jobs:
       - name: build backend loader smoke test
         run: xmake build -y -vD placebo-loader-smoke
 
+      - name: build backend render smoke test
+        run: xmake build -y -vD placebo-render-smoke
+
       - name: smoke-load optional backend
         run: |
           $backend = Get-ChildItem `
@@ -128,6 +134,39 @@ jobs:
 
           if ($LASTEXITCODE -ne 0) {
             throw "libplacebo backend smoke test failed with exit code $LASTEXITCODE"
+          }
+
+      - name: smoke-render one frame through optional backend
+        run: |
+          $backend = Get-ChildItem `
+            -Path "${{ github.workspace }}\build" `
+            -Recurse `
+            -Filter "f4ffmpeg_placebo.dll" `
+            -File `
+            -ErrorAction Stop |
+            Select-Object -First 1
+
+          $smoke = Get-ChildItem `
+            -Path "${{ github.workspace }}\build" `
+            -Recurse `
+            -Filter "placebo-render-smoke.exe" `
+            -File `
+            -ErrorAction Stop |
+            Select-Object -First 1
+
+          if (-not $backend) {
+            throw "f4ffmpeg_placebo.dll was not produced"
+          }
+
+          if (-not $smoke) {
+            throw "placebo-render-smoke.exe was not produced"
+          }
+
+          Write-Host "Rendering one WARP D3D11 frame through $($backend.FullName)"
+          & $smoke.FullName $backend.FullName
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "libplacebo backend render smoke failed with exit code $LASTEXITCODE"
           }
 
       - name: locate core plugin
@@ -165,6 +204,23 @@ jobs:
 
           "path=$($backend.FullName)" >> $env:GITHUB_OUTPUT
 
+      - name: locate optional backend symbols
+        id: backend_symbols
+        run: |
+          $pdb = Get-ChildItem `
+            -Path "${{ github.workspace }}\build" `
+            -Recurse `
+            -Filter "f4ffmpeg_placebo.pdb" `
+            -File `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if ($pdb) {
+            "path=$($pdb.FullName)" >> $env:GITHUB_OUTPUT
+          } else {
+            "path=" >> $env:GITHUB_OUTPUT
+          }
+
       - name: upload core plugin
         uses: actions/upload-artifact@v4
         with:
@@ -178,3 +234,11 @@ jobs:
           name: f4ffmpeg-libplacebo-backend-releasedbg
           path: ${{ steps.backend.outputs.path }}
           if-no-files-found: error
+
+      - name: upload optional libplacebo backend symbols
+        if: steps.backend_symbols.outputs.path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: f4ffmpeg-libplacebo-backend-symbols-releasedbg
+          path: ${{ steps.backend_symbols.outputs.path }}
+          if-no-files-found: warn
