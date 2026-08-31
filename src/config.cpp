@@ -57,6 +57,13 @@ namespace f4ffmpeg::config
         );
 
         spdlog::debug(
+            "Transitions.FallbackTransitionMethod={}, "
+            "Transitions.UsePlaylistTransitionMethod={}",
+            fallbackTransitionMethod.GetValue(),
+            usePlaylistTransitionMethod.GetValue()
+        );
+
+        spdlog::debug(
             "Textures.DisableWorkshopTVRasterScan={}, "
             "Textures.DisableWorkshopTVStatic={}, "
             "Textures.DisableWorkshopTVWarp={}",

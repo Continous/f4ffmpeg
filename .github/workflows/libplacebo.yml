@@ -1,4 +1,4 @@
-name: libplacebo static
+name: libplacebo optional backend
 
 on:
   workflow_dispatch:
@@ -7,6 +7,11 @@ on:
     paths:
       - ".github/workflows/libplacebo.yml"
       - "xmake.lua"
+      - "src/frameConverter.cpp"
+      - "src/placeboBackend*.h"
+      - "src/placeboBackend*.cpp"
+      - "backends/placebo/**"
+      - "tools/placebo-loader-smoke.cpp"
       - "vcpkg-overlays/libplacebo/**"
       - "tools/install-libplacebo-vcpkg.ps1"
   pull_request:
@@ -14,6 +19,11 @@ on:
     paths:
       - ".github/workflows/libplacebo.yml"
       - "xmake.lua"
+      - "src/frameConverter.cpp"
+      - "src/placeboBackend*.h"
+      - "src/placeboBackend*.cpp"
+      - "backends/placebo/**"
+      - "tools/placebo-loader-smoke.cpp"
       - "vcpkg-overlays/libplacebo/**"
       - "tools/install-libplacebo-vcpkg.ps1"
 
@@ -25,7 +35,7 @@ env:
 
 jobs:
   build:
-    name: msvc f4ffmpeg + clang-cl libplacebo
+    name: core + optional libplacebo backend
     runs-on: windows-latest
 
     defaults:
@@ -43,49 +53,108 @@ jobs:
         with:
           xmake-version: latest
 
-      - name: show toolchain
+      - name: build core without libplacebo package
         run: |
-          Write-Host "vcpkg:"
-          & "$env:VCPKG_ROOT\vcpkg.exe" version
-
-          Write-Host "clang-cl:"
-          $clang = Get-Command clang-cl.exe -ErrorAction SilentlyContinue
-          if (-not $clang) {
-            $clang = Get-Command clang-cl -ErrorAction SilentlyContinue
-          }
-          if ($clang) {
-            & $clang.Source --version
-          } else {
-            Write-Host "clang-cl is not on PATH; the overlay will probe the Visual Studio LLVM directories."
-          }
+          xmake config -y -vD `
+            --mode=releasedbg `
+            --toolchain=msvc `
+            --libplacebo_mode=runtime
+          xmake build -y -vD f4ffmpeg
 
       - name: install static libplacebo with vcpkg
         run: .\tools\install-libplacebo-vcpkg.ps1
 
-      - name: configure f4ffmpeg
+      - name: configure optional backend
         run: |
           xmake config -y -vD `
             --mode=releasedbg `
             --toolchain=msvc `
             --libplacebo_mode=static
 
-      - name: build f4ffmpeg
-        run: xmake build -y -vD
+      - name: build core and backend
+        run: |
+          xmake build -y -vD f4ffmpeg
+          xmake build -y -vD f4ffmpeg_placebo
+          xmake build -y -vD placebo-loader-smoke
 
-      - name: inspect runtime DLL dependencies
-        if: always()
+      - name: smoke-load optional backend
+        run: |
+          $backend = Get-ChildItem `
+            -Path "${{ github.workspace }}\build" `
+            -Recurse `
+            -Filter "f4ffmpeg_placebo.dll" `
+            -File `
+            -ErrorAction Stop |
+            Select-Object -First 1
+
+          $smoke = Get-ChildItem `
+            -Path "${{ github.workspace }}\build" `
+            -Recurse `
+            -Filter "placebo-loader-smoke.exe" `
+            -File `
+            -ErrorAction Stop |
+            Select-Object -First 1
+
+          if (-not $backend) {
+            throw "f4ffmpeg_placebo.dll was not produced"
+          }
+
+          if (-not $smoke) {
+            throw "placebo-loader-smoke.exe was not produced"
+          }
+
+          Write-Host "Smoke loading $($backend.FullName)"
+          & $smoke.FullName $backend.FullName
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "libplacebo backend smoke test failed with exit code $LASTEXITCODE"
+          }
+
+      - name: locate core plugin
+        id: core
         run: |
           $plugin = Get-ChildItem `
-            -Path "${{ github.workspace }}" `
+            -Path "${{ github.workspace }}\build" `
             -Recurse `
             -Filter "f4ffmpeg.dll" `
             -File `
-            -ErrorAction SilentlyContinue |
+            -ErrorAction Stop |
+            Where-Object { $_.Name -ne "f4ffmpeg_placebo.dll" } |
             Select-Object -First 1
 
-          if ($plugin) {
-            Write-Host "Inspecting $($plugin.FullName)"
-            dumpbin /dependents $plugin.FullName
-          } else {
-            Write-Host "f4ffmpeg.dll was not produced."
+          if (-not $plugin) {
+            throw "f4ffmpeg.dll was not produced"
           }
+
+          "path=$($plugin.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: locate optional backend
+        id: backend
+        run: |
+          $backend = Get-ChildItem `
+            -Path "${{ github.workspace }}\build" `
+            -Recurse `
+            -Filter "f4ffmpeg_placebo.dll" `
+            -File `
+            -ErrorAction Stop |
+            Select-Object -First 1
+
+          if (-not $backend) {
+            throw "f4ffmpeg_placebo.dll was not produced"
+          }
+
+          "path=$($backend.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: upload core plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: f4ffmpeg-core-releasedbg
+          path: ${{ steps.core.outputs.path }}
+          if-no-files-found: error
+
+      - name: upload optional libplacebo backend
+        uses: actions/upload-artifact@v4
+        with:
+          name: f4ffmpeg-libplacebo-backend-releasedbg
+          path: ${{ steps.backend.outputs.path }}
+          if-no-files-found: error

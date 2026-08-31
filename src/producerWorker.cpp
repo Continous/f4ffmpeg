@@ -38,15 +38,22 @@ bool producerWorker::start()
 }
 
 void producerWorker::submitFrame(
-    std::shared_ptr<const decodeWorker::decodedFrame> frame)
+    std::shared_ptr<const decodeWorker::decodedFrame> frame,
+    std::uint64_t sourceGeneration)
 {
     if (!frame || !running)
     {
         return;
     }
 
+    auto submission =
+        std::make_shared<frameSubmission>();
+
+    submission->frame = std::move(frame);
+    submission->sourceGeneration = sourceGeneration;
+
     pendingFrame.store(
-        std::move(frame),
+        std::move(submission),
         std::memory_order_release
     );
 
@@ -80,20 +87,23 @@ void producerWorker::run()
             break;
         }
 
-        auto frame =
+        auto submission =
             pendingFrame.exchange(
                 nullptr,
                 std::memory_order_acq_rel
             );
 
-        if (!frame || !frame->frame)
+        if (
+            !submission ||
+            !submission->frame ||
+            !submission->frame->frame)
         {
             continue;
         }
 
         auto produced =
             producer.frameProduce(
-                frame->frame.get()
+                submission->frame->frame.get()
             );
 
         if (!produced)
@@ -102,7 +112,10 @@ void producerWorker::run()
         }
 
         produced->timestamp =
-            frame->timestamp;
+            submission->frame->timestamp;
+
+        produced->sourceGeneration =
+            submission->sourceGeneration;
 
         latestFrame.store(
             std::move(produced),

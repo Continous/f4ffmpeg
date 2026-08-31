@@ -75,6 +75,20 @@ namespace f4ffmpeg
                 ".ogv"
             };
 
+        // Playlist transition images are pre-decoded once at manager dispatch.
+        // Deliberately exclude video containers: Image is a static decoder-gap
+        // fallback, not authored transition media.
+        constexpr std::array<std::string_view, 7>
+            supportedTransitionImageExtensions{
+                ".dds",
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".bmp",
+                ".tga",
+                ".webp"
+            };
+
         constexpr std::size_t psSetShaderResourcesVtableIndex =
             8;
 
@@ -180,6 +194,26 @@ namespace f4ffmpeg
             return videoExtensionPriority(
                        path.extension().string()
                    ) >= 0;
+        }
+
+
+        bool isSupportedTransitionImagePath(
+            const std::filesystem::path& path)
+        {
+            const auto extension =
+                path.extension().string();
+
+            return std::any_of(
+                supportedTransitionImageExtensions.begin(),
+                supportedTransitionImageExtensions.end(),
+                [&extension](std::string_view candidate)
+                {
+                    return endsWithInsensitive(
+                        extension,
+                        candidate
+                    );
+                }
+            );
         }
 
         std::string lowercasePath(
@@ -385,6 +419,47 @@ namespace f4ffmpeg
             );
         }
 
+
+        void setPlaylistTransitionImage(
+            videoPlaybackSettings& settings,
+            const std::filesystem::path& iniPath,
+            std::string_view value,
+            std::size_t lineNumber)
+        {
+            std::string entry =
+                trimIniValue(value);
+
+            if (entry.empty())
+                return;
+
+            std::filesystem::path imagePath{
+                entry
+            };
+
+            if (imagePath.is_relative())
+            {
+                imagePath =
+                    iniPath.parent_path() /
+                    imagePath;
+            }
+
+            imagePath = imagePath.lexically_normal();
+
+            if (!isSupportedTransitionImagePath(imagePath))
+            {
+                REX::WARN(
+                    "f4ffmpeg ignored non-image Transition.Image '{}' on line {} of '{}'.",
+                    entry,
+                    lineNumber,
+                    iniPath.string()
+                );
+                return;
+            }
+
+            settings.transitionImage =
+                imagePath.string();
+        }
+
         videoPlaybackSettings loadPlaybackSettings(
             const std::filesystem::path& videoPath)
         {
@@ -564,6 +639,56 @@ namespace f4ffmpeg
                     continue;
                 }
 
+                const bool transitionSection =
+                    section == "transition";
+
+                if (
+                    (transitionSection &&
+                     (key == "method" ||
+                      key == "mode")) ||
+                    (playbackSection &&
+                     key == "transitionmethod"))
+                {
+                    const auto parsed =
+                        parseTransitionMethod(
+                            value,
+                            true
+                        );
+
+                    if (parsed)
+                    {
+                        settings.transition = *parsed;
+                    }
+                    else
+                    {
+                        REX::WARN(
+                            "f4ffmpeg ignored invalid playlist transition method '{}' on line {} of '{}'.",
+                            value,
+                            lineNumber,
+                            iniPath.string()
+                        );
+                    }
+
+                    continue;
+                }
+
+                if (
+                    (transitionSection &&
+                     (key == "image" ||
+                      key == "file")) ||
+                    (playbackSection &&
+                     key == "transitionimage"))
+                {
+                    setPlaylistTransitionImage(
+                        settings,
+                        iniPath,
+                        value,
+                        lineNumber
+                    );
+
+                    continue;
+                }
+
                 if (
                     (playbackSection &&
                      (key == "playlist" ||
@@ -593,12 +718,37 @@ namespace f4ffmpeg
                 );
             }
 
+            if (
+                settings.transitionImage &&
+                settings.transition != transitionMethod::image)
+            {
+                REX::WARN(
+                    "f4ffmpeg playlist transition image '{}' is present but Method is not Image; the image will not be used.",
+                    *settings.transitionImage
+                );
+            }
+
+            if (
+                settings.transition == transitionMethod::image &&
+                !settings.transitionImage)
+            {
+                REX::WARN(
+                    "f4ffmpeg playlist requested transition Method=Image without an Image; global fallback will be used."
+                );
+            }
+
             REX::INFO(
-                "f4ffmpeg loaded playback INI '{}': loop={}, shuffle={}, playlist entries={}.",
+                "f4ffmpeg loaded playback INI '{}': loop={}, shuffle={}, playlist entries={}, transition={}, transition image={}.",
                 iniPath.string(),
                 settings.looping,
                 settings.shuffle,
-                settings.playlist.size()
+                settings.playlist.size(),
+                settings.transition
+                    ? transitionMethodName(*settings.transition)
+                    : "<global>",
+                settings.transitionImage
+                    ? settings.transitionImage->c_str()
+                    : "<none>"
             );
 
             return settings;
@@ -2986,6 +3136,62 @@ namespace f4ffmpeg
                 if (!target)
                     continue;
 
+                const auto transition =
+                    target->getTransitionPresentation();
+
+                if (transition.active)
+                {
+                    switch (transition.method)
+                    {
+                        case transitionMethod::vanillaDDS:
+                            // Deliberately leave Bethesda's exact SRV in place.
+                            // No synthetic fallback resource is created.
+                            continue;
+
+                        case transitionMethod::blackFrame:
+                            // A null SRV is a legal D3D11 unbound resource and
+                            // samples as zero. This is intentionally the same
+                            // mechanism used by target-local raster suppression.
+                            replacementViews[index] = nullptr;
+                            replacedAny = true;
+                            continue;
+
+                        case transitionMethod::holdLastFrame:
+                        case transitionMethod::image:
+                        {
+                            const auto& transitionFrame =
+                                transition.frame;
+
+                            if (
+                                !transitionFrame ||
+                                transitionFrame->texture == nullptr ||
+                                transitionFrame->resourceView == nullptr)
+                            {
+                                // HoldLastFrame has nothing useful to hold before
+                                // the first produced frame. Image is resolved back
+                                // to the global fallback before reaching this path
+                                // if its preload failed. Vanilla is the safest
+                                // final presentation fallback.
+                                continue;
+                            }
+
+                            auto* transitionSrv =
+                                getProducedSrv(
+                                    *transitionFrame
+                                );
+
+                            if (transitionSrv == nullptr)
+                                continue;
+
+                            replacementViews[index] =
+                                transitionSrv;
+
+                            replacedAny = true;
+                            continue;
+                        }
+                    }
+                }
+
                 const auto frame =
                     target->getLatestFrame();
 
@@ -3252,6 +3458,27 @@ namespace f4ffmpeg
         return currentPlayback->getLatestFrame();
     }
 
+
+    transitionPresentation
+    videoTarget::getTransitionPresentation() const
+    {
+        std::shared_ptr<manager> currentPlayback;
+
+        {
+            std::shared_lock lock(
+                playbackMutex
+            );
+
+            currentPlayback =
+                playback;
+        }
+
+        if (!currentPlayback)
+            return {};
+
+        return currentPlayback->getTransitionPresentation();
+    }
+
     std::optional<std::string>
     getVideoPathForTexture(
         const char* texturePath)
@@ -3433,7 +3660,7 @@ namespace f4ffmpeg
                 playback =
                     createManager(
                         videoPath.c_str(),
-                        video.playbackSettings.looping
+                        video.playbackSettings
                     );
 
                 if (!playback)
@@ -3474,7 +3701,7 @@ namespace f4ffmpeg
                 !video.playbackSettings.playlist.empty())
             {
                 REX::DEBUG(
-                    "f4ffmpeg playback policy for '{}': shuffle={} and {} playlist entry/entries are parsed and bound but not consumed by manager yet.",
+                    "f4ffmpeg playback policy for '{}': shuffle={} with {} additional playlist entry/entries.",
                     videoPath,
                     video.playbackSettings.shuffle,
                     video.playbackSettings.playlist.size()

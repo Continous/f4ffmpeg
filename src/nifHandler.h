@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "playbackPolicy.h"
+
 namespace f4ffmpeg
 {
     class manager;
@@ -16,14 +18,6 @@ namespace f4ffmpeg
     {
         vanillaOverride,
         directTextureSwap
-    };
-
-    struct videoPlaybackSettings
-    {
-        // Preserve the original f4ffmpeg behavior when no sidecar INI exists.
-        bool looping = true;
-        bool shuffle = false;
-        std::vector<std::string> playlist;
     };
 
     class videoTarget
@@ -66,6 +60,9 @@ namespace f4ffmpeg
 
         std::shared_ptr<const producedFrame>
         getLatestFrame() const;
+
+        transitionPresentation
+        getTransitionPresentation() const;
 
     private:
         friend std::shared_ptr<const videoTarget>

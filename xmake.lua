@@ -30,12 +30,10 @@ add_requires("ffmpeg", {
     }
 })
 
--- libplacebo is opportunistic. The normal preference order is:
---   1. statically linked libplacebo from the repository vcpkg overlay;
---   2. a compatible user-provided libplacebo DLL loaded at runtime;
---   3. libswscale.
---
--- f4ffmpeg itself never builds or bundles the shared DLL fallback.
+-- libplacebo is opportunistic. f4ffmpeg.dll never imports it directly.
+-- In static/auto builds the vcpkg package is linked into the optional
+-- f4ffmpeg_placebo.dll companion; runtime mode only enables probing for a
+-- separately supplied compatible companion. libswscale remains core fallback.
 option("libplacebo_mode")
     set_default("auto")
     set_showmenu(true)
@@ -46,7 +44,7 @@ option("libplacebo_mode")
         "off"
     )
     set_description(
-        "libplacebo mode: auto/static/runtime/off"
+        "libplacebo backend mode: auto/static(runtime companion built)/runtime/off"
     )
 option_end()
 
@@ -95,49 +93,52 @@ target("f4ffmpeg")
         description = "This is a simple plugin intended to provide FFMPEG."
     })
 
-    -- add src files
-    add_files("src/**.cpp", "src/**.c")
+    add_files("src/**.cpp")
     add_headerfiles("src/**.h")
     add_includedirs("src")
     set_pcxxheader("src/pch.h")
 
-    -- FFmpeg always provides demux/decode and the libswscale fallback.
+    -- Core never links libplacebo. It late-loads f4ffmpeg_placebo.dll through
+    -- the small C ABI in placeboBackendApi.h and always retains libswscale.
     add_packages("ffmpeg")
 
     if placebo_mode == "off" then
-        add_defines(
-            "F4FFMPEG_HAS_LIBPLACEBO_STATIC=0",
-            "F4FFMPEG_ALLOW_LIBPLACEBO_DLL=0"
-        )
-    elseif placebo_mode == "runtime" then
-        -- Never link libplacebo in this mode. Future runtime dispatch may use
-        -- only a compatible user-provided DLL.
-        add_defines(
-            "F4FFMPEG_HAS_LIBPLACEBO_STATIC=0",
-            "F4FFMPEG_ALLOW_LIBPLACEBO_DLL=1"
-        )
-    elseif placebo_mode == "static" then
-        -- add_requires() above is strict in this mode, so reaching the target
-        -- means the static package was successfully resolved.
-        add_packages("f4ffmpeg-libplacebo")
-        add_defines(
-            "PL_STATIC",
-            "F4FFMPEG_HAS_LIBPLACEBO_STATIC=1",
-            "F4FFMPEG_ALLOW_LIBPLACEBO_DLL=1"
-        )
-    elseif has_package("f4ffmpeg-libplacebo") then
-        -- auto mode successfully resolved the preferred built-in package.
-        add_packages("f4ffmpeg-libplacebo")
-        add_defines(
-            "PL_STATIC",
-            "F4FFMPEG_HAS_LIBPLACEBO_STATIC=1",
-            "F4FFMPEG_ALLOW_LIBPLACEBO_DLL=1"
-        )
+        add_defines("F4FFMPEG_ALLOW_PLACEBO_BACKEND=0")
     else
-        -- auto mode could not resolve the static package. Keep the plugin
-        -- buildable and permit the optional user-supplied DLL path.
-        add_defines(
-            "F4FFMPEG_HAS_LIBPLACEBO_STATIC=0",
-            "F4FFMPEG_ALLOW_LIBPLACEBO_DLL=1"
-        )
+        add_defines("F4FFMPEG_ALLOW_PLACEBO_BACKEND=1")
     end
+
+target_end()
+
+local build_placebo_backend =
+    placebo_mode == "static" or
+    (placebo_mode == "auto" and has_package("f4ffmpeg-libplacebo"))
+
+if build_placebo_backend then
+    target("f4ffmpeg_placebo")
+        set_kind("shared")
+        set_filename("f4ffmpeg_placebo.dll")
+        set_default(true)
+
+        add_files(
+            "backends/placebo/placeboBackend.cpp",
+            "backends/placebo/placeboLibav.c"
+        )
+        add_headerfiles("src/placeboBackendApi.h")
+        add_includedirs("src")
+
+        -- The companion owns the hard libplacebo link. libplacebo itself is
+        -- static here, so f4ffmpeg_placebo.dll is the only optional runtime
+        -- component that core needs to probe.
+        add_packages("ffmpeg", "f4ffmpeg-libplacebo")
+        add_defines("PL_STATIC")
+        add_links("d3d11", "dxgi")
+    target_end()
+end
+
+target("placebo-loader-smoke")
+    set_kind("binary")
+    set_default(false)
+    add_files("tools/placebo-loader-smoke.cpp")
+    add_includedirs("src")
+target_end()

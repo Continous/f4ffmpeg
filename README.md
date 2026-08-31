@@ -9,7 +9,14 @@ This is a simple plugin intended to provide FFMPEG.
 
 ## Credit
 
-This is based on the CommonLibF4 Plugin Template
+This is based on the CommonLibF4 Plugin Template, so thanks to the Dear Fallout 4 community and everyone else who made commonlib possible.
+
+Nomad from the G.A.R.D.E.N. server for being so supportive.
+
+LichtFeld-Sudio https://github.com/MrNeRF/LichtFeld-Studio , who's libplacebo build process we basically just lifted lmao.
+ffmpeg for making the best media programming library on the planet.
+
+Github for providing free actions so that I can freeload and not have to run a VM.
 
 ## AI Disclosure
 

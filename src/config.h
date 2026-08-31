@@ -22,16 +22,30 @@ namespace f4ffmpeg::config
         0.250
     };
 
-    // Decoded-frame presentation conversion policy. libplacebo is the primary
-    // converter for every decoder backend; libswscale is retained only as a
-    // compatibility fallback when a source format cannot be mapped/rendered.
-    // cheapest: libplacebo fast preset (minimal processing / bilinear-style path).
-    // balanced: libplacebo default/recommended renderer preset.
-    // quality: libplacebo high-quality preset (HQ scaling, debanding/color mapping).
+    // Decoded-frame presentation conversion policy. The optional libplacebo
+    // companion is tried first when installed; metadata-aware libswscale remains
+    // the always-available compatibility fallback in the core plugin.
+    // cheapest/balanced/quality select the corresponding conversion profile.
     inline REX::TTomlSetting<std::string> conversionQuality{
         "Playback",
         "ConversionQuality",
         "balanced"
+    };
+
+    // Decoder-gap fallback used when no permitted playlist override applies.
+    // Supported global values: VanillaDDS, HoldLastFrame, BlackFrame.
+    // Image is deliberately playlist-only.
+    inline REX::TTomlSetting<std::string> fallbackTransitionMethod{
+        "Transitions",
+        "FallbackTransitionMethod",
+        "VanillaDDS"
+    };
+
+    // If false, playlist-side transition Method/Image metadata is ignored.
+    inline REX::TTomlSetting<bool> usePlaylistTransitionMethod{
+        "Transitions",
+        "UsePlaylistTransitionMethod",
+        true
     };
 
     // Workshop-TV presentation effects. nifHandler scopes these to scene

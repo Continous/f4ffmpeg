@@ -77,6 +77,11 @@ namespace f4ffmpeg
 
         double timestamp = -1.0;
 
+        // Manager-assigned source generation. This lets decoder-gap transitions
+        // remain active until a produced frame from the newly initialized source
+        // has actually reached the presentation side.
+        std::uint64_t sourceGeneration = 0;
+
         ~producedFrame();
     };
 

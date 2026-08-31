@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -19,13 +20,20 @@ namespace f4ffmpeg
         void stop();
 
         void submitFrame(
-            std::shared_ptr<const decodeWorker::decodedFrame> frame
+            std::shared_ptr<const decodeWorker::decodedFrame> frame,
+            std::uint64_t sourceGeneration
         );
 
         std::shared_ptr<const producedFrame>
         getLatestFrame() const;
 
     private:
+        struct frameSubmission
+        {
+            std::shared_ptr<const decodeWorker::decodedFrame> frame;
+            std::uint64_t sourceGeneration = 0;
+        };
+
         void run();
 
         decoder producer;
@@ -36,7 +44,7 @@ namespace f4ffmpeg
         std::atomic<bool> running = false;
 
         std::atomic<
-            std::shared_ptr<const decodeWorker::decodedFrame>
+            std::shared_ptr<const frameSubmission>
         > pendingFrame;
 
         std::atomic<
