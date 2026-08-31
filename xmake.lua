@@ -180,14 +180,6 @@ if build_placebo_backend then
     target_end()
 end
 
-local placebo_smoke_source =
-    path.join(os.projectdir(), "tools", "placebo-loader-smoke.cpp")
-
-assert(
-    os.isfile(placebo_smoke_source),
-    "required source tools/placebo-loader-smoke.cpp is missing from the checkout"
-)
-
 target("placebo-loader-smoke")
     set_kind("binary")
     set_default(false)
