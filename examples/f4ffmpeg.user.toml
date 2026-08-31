@@ -1,0 +1,8 @@
+[Transitions]
+# Decoder-gap fallback when a playlist transition override is not permitted,
+# not provided, or cannot be prepared.
+# Supported: "VanillaDDS", "HoldLastFrame", "BlackFrame"
+FallbackTransitionMethod = "VanillaDDS"
+
+# If false, all playlist-side transition Method/Image metadata is ignored.
+UsePlaylistTransitionMethod = true
