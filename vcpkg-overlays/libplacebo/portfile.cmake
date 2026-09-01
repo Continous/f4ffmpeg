@@ -30,6 +30,33 @@ vcpkg_from_github(
     HEAD_REF master
 )
 
+# GitHub source archives do not contain libplacebo's recursive Jinja/MarkupSafe
+# submodules. libplacebo's Meson build always uses its Python GLSL preprocessor
+# for generated shader C sources and automatically prepends these two bundled
+# source directories to PYTHONPATH. Vendor the same pinned sources used by the
+# known-working Windows/vcpkg port; this avoids depending on pip or mutating the
+# vcpkg-hosted Python installation.
+vcpkg_from_github(
+    OUT_SOURCE_PATH JINJA_SOURCE
+    REPO pallets/jinja
+    REF 15206881c006c79667fe5154fe80c01c65410679
+    SHA512 E1082222A4660E60F05E970E7C5B6F2FAB377BA01C273BCB6FE0EAD457EA5D4764C1D95FB3264B6BC371E122D574517AC35B6AE3858B50BC4918ACD08A3F75DE
+    HEAD_REF main
+)
+
+vcpkg_from_github(
+    OUT_SOURCE_PATH MARKUPSAFE_SOURCE
+    REPO pallets/markupsafe
+    REF 297fc8e356e6836a62087949245d09a28e9f1b13
+    SHA512 8E16146B42DE9F0939B706C1652D4C5FE8E67E1F7E0C5A0E37D698D9AB10DCADF3E26B12E4BE2B37209C33703996351B02C54AF7CEB2D9EAF24AEDE7CECDF648
+    HEAD_REF main
+)
+
+file(COPY "${JINJA_SOURCE}/src/"
+     DESTINATION "${SOURCE_PATH}/3rdparty/jinja/src")
+file(COPY "${MARKUPSAFE_SOURCE}/src/"
+     DESTINATION "${SOURCE_PATH}/3rdparty/markupsafe/src")
+
 # vcpkg's SPIRV-Cross port is deliberately static-only and installs the C API
 # as `spirv-cross-c`. libplacebo 7.360.1 asks for the shared pkg-config name
 # when D3D11 is enabled. Keep the version/required logic intact and change

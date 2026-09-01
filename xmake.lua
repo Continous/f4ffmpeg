@@ -168,8 +168,9 @@ if build_placebo_backend then
         -- static here, so f4ffmpeg_placebo.dll is the only optional runtime
         -- component that core needs to probe. Keep the static dependency
         -- closure explicit: glslang and SPIRV-Cross are private libplacebo
-        -- dependencies, while shlwapi/version are Windows system dependencies
-        -- used by libplacebo's common and D3D11 code.
+        -- dependencies retained by the current vcpkg overlay. The Vulkan
+        -- companion itself only needs libplacebo's Vulkan+glslang backend;
+        -- D3D11 is used solely for the final Fallout texture handoff.
         add_packages(
             "ffmpeg",
             "f4ffmpeg-libplacebo",

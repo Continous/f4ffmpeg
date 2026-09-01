@@ -30,8 +30,13 @@ namespace
 #if defined(F4FFMPEG_ALLOW_PLACEBO_BACKEND) && F4FFMPEG_ALLOW_PLACEBO_BACKEND
             ensureLoaded();
 
-            if (convertFunction == nullptr)
+            if (
+                convertFunction == nullptr ||
+                permanentlyUnavailable.load(
+                    std::memory_order_acquire))
+            {
                 return false;
+            }
 
             auto* device = getD3D11Device();
             if (device == nullptr)
@@ -39,12 +44,37 @@ namespace
 
             f4ffmpeg_placebo_output backendOutput{};
 
-            if (!convertFunction(
+            const std::int32_t result =
+                convertFunction(
                     reinterpret_cast<void*>(device),
                     &frame,
                     quality,
-                    &backendOutput))
+                    &backendOutput
+                );
+
+            if (result != F4FFMPEG_PLACEBO_SUCCESS)
             {
+                if (
+                    result == F4FFMPEG_PLACEBO_UNAVAILABLE &&
+                    !permanentlyUnavailable.exchange(
+                        true,
+                        std::memory_order_acq_rel))
+                {
+                    REX::WARN(
+                        "Optional libplacebo Vulkan backend could not be established; disabling it for this process and using libswscale."
+                    );
+                }
+                else if (
+                    result == F4FFMPEG_PLACEBO_DEVICE_UNAVAILABLE &&
+                    !deviceUnavailableReported.exchange(
+                        true,
+                        std::memory_order_acq_rel))
+                {
+                    REX::WARN(
+                        "Optional libplacebo backend could not import the current FFmpeg Vulkan device; using libswscale for that decoder path."
+                    );
+                }
+
                 return false;
             }
 
@@ -52,6 +82,9 @@ namespace
                 backendOutput.texture == nullptr ||
                 backendOutput.resource_view == nullptr)
             {
+                REX::WARN(
+                    "Optional libplacebo backend reported success without a complete D3D11 output; using libswscale."
+                );
                 return false;
             }
 
@@ -79,7 +112,10 @@ namespace
         {
 #if defined(F4FFMPEG_ALLOW_PLACEBO_BACKEND) && F4FFMPEG_ALLOW_PLACEBO_BACKEND
             ensureLoaded();
-            return convertFunction != nullptr;
+            return
+                convertFunction != nullptr &&
+                !permanentlyUnavailable.load(
+                    std::memory_order_acquire);
 #else
             return false;
 #endif
@@ -140,7 +176,7 @@ namespace
                 convertFunction = convert;
 
                 REX::INFO(
-                    "Optional libplacebo presentation backend loaded from '{}'.",
+                    "Optional libplacebo Vulkan presentation backend loaded from '{}'.",
                     backendPath.string()
                 );
             });
@@ -185,12 +221,12 @@ namespace
         std::once_flag loadOnce;
         HMODULE module = nullptr;
         f4ffmpeg_placebo_convert_fn convertFunction = nullptr;
+        std::atomic_bool permanentlyUnavailable = false;
+        std::atomic_bool deviceUnavailableReported = false;
     };
 
     optionalPlaceboBackend& sharedBackend()
     {
-        // Intentionally process-lifetime. Avoid DLL unload ordering against the
-        // Fallout D3D11 device during process teardown.
         static auto* backend =
             new optionalPlaceboBackend();
         return *backend;

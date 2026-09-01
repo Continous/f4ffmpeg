@@ -546,6 +546,22 @@ bool convertFrameForPresentation(
     const AVFrame& frame,
     producedFrame& output)
 {
+    const auto& policy =
+        activeConversionPolicy();
+
+    // Give the optional companion the untouched decoder frame first. ABI 2
+    // consumes AV_PIX_FMT_VULKAN directly by importing FFmpeg's VkDevice into
+    // libplacebo. Any unsupported frame/device cleanly returns false here.
+    if (tryPlaceboBackendConvert(
+            frame,
+            static_cast<std::uint32_t>(policy.mode),
+            output))
+    {
+        return true;
+    }
+
+    // Compatibility path: only now normalize hardware frames back to system
+    // memory for metadata-aware libswscale conversion.
     preparedFrame prepared;
 
     if (!prepareFrameForConversion(
@@ -553,17 +569,6 @@ bool convertFrameForPresentation(
             prepared))
     {
         return false;
-    }
-
-    const auto& policy =
-        activeConversionPolicy();
-
-    if (tryPlaceboBackendConvert(
-            *prepared.frame,
-            static_cast<std::uint32_t>(policy.mode),
-            output))
-    {
-        return true;
     }
 
     static std::atomic_bool fallbackReported = false;

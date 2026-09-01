@@ -200,14 +200,19 @@ int wmain(int argc, wchar_t** argv)
         &output
     );
 
+    // ABI 2 is Vulkan-only. A normal software AVFrame must be rejected cleanly
+    // so core can continue through libswscale. This smoke intentionally does
+    // not require a Vulkan-capable CI runner; it verifies the fallback contract.
     if (
-        converted == 0 ||
-        output.texture == nullptr ||
-        output.resource_view == nullptr ||
-        output.width != static_cast<std::uint32_t>(frame->width) ||
-        output.height != static_cast<std::uint32_t>(frame->height))
+        converted != F4FFMPEG_PLACEBO_FALLBACK ||
+        output.texture != nullptr ||
+        output.resource_view != nullptr ||
+        output.width != 0 ||
+        output.height != 0)
     {
-        std::cerr << "libplacebo backend did not render the synthetic frame\n";
+        std::cerr
+            << "Vulkan companion did not gracefully reject a software AVFrame "
+            << "(result=" << converted << ")\n";
         releaseBackendOutput(output);
         av_frame_free(&frame);
         immediateContext->Release();
@@ -223,6 +228,6 @@ int wmain(int argc, wchar_t** argv)
     FreeLibrary(module);
 
     std::cout
-        << "f4ffmpeg_placebo one-frame D3D11 WARP render smoke passed\n";
+        << "f4ffmpeg_placebo Vulkan software-frame fallback smoke passed\n";
     return 0;
 }
