@@ -40,6 +40,39 @@ vcpkg_replace_string(
     "spirv-cross-c"
 )
 
+# Meson's compiler.find_library(static: true) does not reliably honor vcpkg's
+# linker search path. libplacebo 7.360.x uses find_library() directly for the
+# glslang/SPIR-V closure, which can therefore report `SPIRV` missing even
+# though vcpkg installed it successfully. Explicitly add the active target
+# triplet's library directory to every glslang probe. This mirrors the
+# established downstream workaround used by other package systems, but keeps
+# the path scoped to this vcpkg port.
+file(TO_CMAKE_PATH "${CURRENT_INSTALLED_DIR}/lib" _f4ffmpeg_glslang_libdir)
+
+vcpkg_replace_string(
+    "${SOURCE_PATH}/src/glsl/meson.build"
+    "  glslang_deps = ["
+    "  glslang_vcpkg_lib_dirs = ['${_f4ffmpeg_glslang_libdir}']\n  glslang_deps = ["
+)
+
+vcpkg_replace_string(
+    "${SOURCE_PATH}/src/glsl/meson.build"
+    "cxx.find_library('glslang-default-resource-limits', required: false)"
+    "cxx.find_library('glslang-default-resource-limits', required: false, dirs: glslang_vcpkg_lib_dirs)"
+)
+
+vcpkg_replace_string(
+    "${SOURCE_PATH}/src/glsl/meson.build"
+    "cxx.find_library('glslang', required: required, static: static)"
+    "cxx.find_library('glslang', required: required, static: static, dirs: glslang_vcpkg_lib_dirs + vulkan_lib_dirs)"
+)
+
+vcpkg_replace_string(
+    "${SOURCE_PATH}/src/glsl/meson.build"
+    "dirs: vulkan_lib_dirs)"
+    "dirs: glslang_vcpkg_lib_dirs + vulkan_lib_dirs)"
+)
+
 # libplacebo is happier with clang-cl on Windows, while f4ffmpeg itself can
 # remain an ordinary MSVC build. Locate the VS/LLVM compiler and override
 # only Meson's C/C++ compiler for this port.
