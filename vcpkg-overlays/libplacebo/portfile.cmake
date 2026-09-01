@@ -15,6 +15,13 @@
 
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
+# f4ffmpeg only ships the release/releasedbg companion. vcpkg's Debug glslang
+# archives use the conventional `d` suffix (for example SPIRVd.lib), while
+# libplacebo 7.360.1's Meson glslang probe asks for the unsuffixed library
+# names even during a Debug configure. Avoid configuring an unused Debug
+# libplacebo variant that therefore cannot discover vcpkg's Debug glslang.
+set(VCPKG_BUILD_TYPE release)
+
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO haasn/libplacebo
