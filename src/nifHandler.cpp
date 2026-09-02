@@ -5066,6 +5066,7 @@ namespace f4ffmpeg
                         nukaColaMachineScreenTargets.emplace(
                             lowercasePath(editorId)
                         );
+                    }
                 }
 
                 for (const auto& editorId :
