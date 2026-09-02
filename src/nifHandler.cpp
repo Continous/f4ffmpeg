@@ -1268,7 +1268,9 @@ namespace f4ffmpeg
         bool nukaColaMachineScreenInjectionEnabled = false;
         std::string nukaColaMachineScreenSourceForm;
         RE::TESBoundObject* nukaColaMachineScreenSource = nullptr;
+        std::mutex nukaColaMachineScreenSourceMutex;
         std::string nukaColaMachineScreenSanitization;
+        std::atomic_bool nukaColaMachineCellEventObserved = false;
 
         std::unordered_map<
             std::string,
@@ -1499,7 +1501,35 @@ namespace f4ffmpeg
             if (root == nullptr)
                 return false;
 
-            if (nukaColaMachineScreenSource == nullptr)
+            RE::TESBoundObject* sourceForm = nullptr;
+            {
+                std::scoped_lock lock(nukaColaMachineScreenSourceMutex);
+                sourceForm = nukaColaMachineScreenSource;
+
+                if (sourceForm == nullptr)
+                {
+                    REX::INFO(
+                        "f4ffmpeg resolving Nuka-Cola screen source form '{}' for target reference {:08X}.",
+                        nukaColaMachineScreenSourceForm,
+                        reference.GetFormID()
+                    );
+
+                    const RE::BSFixedString sourceEditorId{
+                        nukaColaMachineScreenSourceForm.c_str()
+                    };
+                    sourceForm = RE::TESForm::GetFormByEditorID<
+                        RE::TESBoundObject>(sourceEditorId);
+                    nukaColaMachineScreenSource = sourceForm;
+
+                    REX::INFO(
+                        "f4ffmpeg Nuka-Cola screen source form '{}' resolution {}.",
+                        nukaColaMachineScreenSourceForm,
+                        sourceForm != nullptr ? "succeeded" : "failed"
+                    );
+                }
+            }
+
+            if (sourceForm == nullptr)
             {
                 REX::WARN(
                     "f4ffmpeg could not resolve Nuka-World screen source form '{}'; disabling screen injection for this session.",
@@ -1510,7 +1540,12 @@ namespace f4ffmpeg
             }
 
             RE::NiPointer<RE::NiAVObject> screenRoot;
-            nukaColaMachineScreenSource->Clone3D(&reference, screenRoot);
+            REX::INFO(
+                "f4ffmpeg cloning Nuka-Cola screen source form '{}' for reference {:08X}.",
+                nukaColaMachineScreenSourceForm,
+                reference.GetFormID()
+            );
+            sourceForm->Clone3D(&reference, screenRoot);
 
             auto* screenNode = screenRoot != nullptr
                 ? screenRoot->IsNode()
@@ -1543,6 +1578,10 @@ namespace f4ffmpeg
                 return false;
             }
 
+            REX::INFO(
+                "f4ffmpeg attaching Nuka-Cola commercial screen to reference {:08X}.",
+                reference.GetFormID()
+            );
             parent->AttachChild(screenNode, false);
             REX::INFO(
                 "f4ffmpeg attached Nuka-Cola commercial screen to reference {:08X} (sanitized={}).",
@@ -1562,6 +1601,15 @@ namespace f4ffmpeg
             {
                 if (!nukaColaMachineScreenInjectionEnabled || event.cell == nullptr)
                     return RE::BSEventNotifyControl::kContinue;
+
+                if (!nukaColaMachineCellEventObserved.exchange(
+                        true,
+                        std::memory_order_acq_rel))
+                {
+                    REX::INFO(
+                        "f4ffmpeg received a TESCellFullyLoadedEvent while Nuka-Cola screen injection is enabled."
+                    );
+                }
 
                 event.cell->ForEachReference(
                     [](RE::TESObjectREFR* reference)
@@ -1619,6 +1667,17 @@ namespace f4ffmpeg
             }
 
             const auto formId = reference->GetFormID();
+            if (backgroundLoading)
+            {
+                // Clone3D and scene-graph attachment are main-thread work. The
+                // cell-loaded event remains responsible for this reference.
+                REX::INFO(
+                    "f4ffmpeg encountered Nuka-Cola screen target reference {:08X} during background Load3D; deferring attachment to the cell-loaded path.",
+                    formId
+                );
+                return root;
+            }
+
             {
                 std::scoped_lock lock(injectedNukaColaMachineReferencesMutex);
                 if (injectedNukaColaMachineReferences.contains(formId))
@@ -1645,6 +1704,9 @@ namespace f4ffmpeg
                 return true;
 
             constexpr std::size_t referenceLoad3DVtableIndex = 0x86;
+            REX::INFO(
+                "f4ffmpeg initializing TESObjectREFR::Load3D hook for Nuka-Cola screen injection."
+            );
             REL::Relocation<std::uintptr_t> vtable{
                 RE::TESObjectREFR::VTABLE[0]
             };
@@ -1666,6 +1728,18 @@ namespace f4ffmpeg
                 referenceLoad3DVtableIndex,
                 referenceLoad3DHook
             );
+
+            const auto patched = *reinterpret_cast<const std::uintptr_t*>(
+                vtable.address() + sizeof(void*) * referenceLoad3DVtableIndex
+            );
+            if (patched != reinterpret_cast<std::uintptr_t>(&referenceLoad3DHook))
+            {
+                REX::WARN(
+                    "f4ffmpeg failed to patch TESObjectREFR::Load3D; disabling Nuka-Cola screen injection."
+                );
+                nukaColaMachineScreenInjectionEnabled = false;
+                return false;
+            }
 
             REX::INFO(
                 "f4ffmpeg TESObjectREFR::Load3D hook initialized for Nuka-Cola screen injection."
@@ -4824,6 +4898,14 @@ namespace f4ffmpeg
                     config::nukaColaMachineScreenSanitization.GetValue()
                 );
 
+                REX::INFO(
+                    "f4ffmpeg Extra Nuka-Cola screen config: enabled={}, target forms={}, source form='{}', sanitization='{}'.",
+                    nukaColaMachineScreenInjectionEnabled,
+                    config::nukaColaMachineScreenTargets.GetValue().size(),
+                    nukaColaMachineScreenSourceForm,
+                    nukaColaMachineScreenSanitization
+                );
+
                 for (const auto& editorId :
                      config::nukaColaMachineScreenTargets.GetValue())
                 {
@@ -4863,23 +4945,6 @@ namespace f4ffmpeg
                 }
                 else if (nukaColaMachineScreenInjectionEnabled)
                 {
-                    const RE::BSFixedString sourceEditorId{
-                        nukaColaMachineScreenSourceForm.c_str()
-                    };
-                    nukaColaMachineScreenSource =
-                        RE::TESForm::GetFormByEditorID<RE::TESBoundObject>(
-                            sourceEditorId
-                        );
-
-                    if (nukaColaMachineScreenSource == nullptr)
-                    {
-                        REX::WARN(
-                            "f4ffmpeg could not resolve Extra.NukaColaMachineScreenSourceForm '{}'; disabling Nuka-Cola screen injection.",
-                            nukaColaMachineScreenSourceForm
-                        );
-                        nukaColaMachineScreenInjectionEnabled = false;
-                    }
-
                     auto* cellEventSource =
                         RE::TESCellFullyLoadedEvent::GetEventSource();
                     if (nukaColaMachineScreenInjectionEnabled &&
