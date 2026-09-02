@@ -85,6 +85,13 @@ namespace f4ffmpeg::config
         {}
     };
 
+    // The DLC04 base form whose 3D is the commercial-screen effect NIF.
+    inline REX::TTomlSetting<std::string> nukaColaMachineScreenSourceForm{
+        "Extra",
+        "NukaColaMachineScreenSourceForm",
+        "NukaColaMachineCommercialFx"
+    };
+
     // Never, OutsideNukaWorld, or Everywhere. Sanitization disables the
     // injected NIF's controller chain, including its autoplay sound event.
     inline REX::TTomlSetting<std::string> nukaColaMachineScreenSanitization{

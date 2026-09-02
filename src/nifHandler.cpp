@@ -32,11 +32,11 @@
 #include <RE/B/BSShaderTextureSet.h>
 #include <RE/B/BSTextureSet.h>
 #include <RE/T/TESCellFullyLoadedEvent.h>
+#include <RE/T/TESBoundObject.h>
 #include <RE/T/TESObjectREFR.h>
 #include <RE/N/NiAVObject.h>
 #include <RE/N/NiNode.h>
 #include <RE/N/NiPointer.h>
-#include <RE/N/NiStream.h>
 #include <RE/N/NiTexture.h>
 #include <RE/P/PlayerCharacter.h>
 #include <RE/B/BGSLocation.h>
@@ -64,10 +64,6 @@ namespace f4ffmpeg
         constexpr std::string_view workshopTvRasterScanTexture =
             "textures\\effects\\tvanim\\rasterscananim_d.dds";
 
-        // This mesh is supplied by Nuka-World. Pass a game-relative mesh path
-        // to NiStream so Fallout can resolve it from its loose-file/BSA stack.
-        constexpr std::string_view nukaColaMachineScreenNif =
-            "meshes\\actors\\dlc04\\nukatron\\nukacolamachinecommercialfx.nif";
 
         // Keep .mov first for backward-compatible collision precedence.
         // The decoder itself is FFmpeg-backed; nifHandler only needs to avoid
@@ -1270,6 +1266,7 @@ namespace f4ffmpeg
         std::unordered_set<RE::TESFormID> injectedNukaColaMachineReferences;
         std::mutex injectedNukaColaMachineReferencesMutex;
         bool nukaColaMachineScreenInjectionEnabled = false;
+        std::string nukaColaMachineScreenSourceForm;
         std::string nukaColaMachineScreenSanitization;
 
         std::unordered_map<
@@ -1453,33 +1450,6 @@ namespace f4ffmpeg
             }
         }
 
-        template <class T>
-        struct niLargeArrayLayout
-        {
-            void* vtable = nullptr;
-            T* data = nullptr;
-            std::uint32_t capacity = 0;
-            std::uint32_t freeIndex = 0;
-            std::uint32_t size = 0;
-            std::uint32_t growBy = 0;
-        };
-
-        static_assert(sizeof(niLargeArrayLayout<RE::NiPointer<RE::NiObject>>) ==
-            0x20);
-
-        RE::NiObject* getFirstLoadedNifObject(RE::NiStream& stream)
-        {
-            auto* objects = reinterpret_cast<niLargeArrayLayout<
-                RE::NiPointer<RE::NiObject>>*>(
-                    std::addressof(stream.topObjects)
-                );
-
-            if (objects->data == nullptr || objects->size == 0)
-                return nullptr;
-
-            return objects->data[0].get();
-        }
-
         bool isNukaWorldLocation(const RE::BGSLocation* location)
         {
             for (; location != nullptr; location = location->parentLoc)
@@ -1512,28 +1482,33 @@ namespace f4ffmpeg
             if (root == nullptr)
                 return false;
 
-            RE::NiStream stream{};
-            REX::EMPLACE_VTABLE(std::addressof(stream));
+            const RE::BSFixedString sourceEditorId{
+                nukaColaMachineScreenSourceForm.c_str()
+            };
+            auto* sourceForm = RE::TESForm::GetFormByEditorID<
+                RE::TESBoundObject>(sourceEditorId);
 
-            if (!stream.Load(nukaColaMachineScreenNif.data()))
+            if (sourceForm == nullptr)
             {
                 REX::WARN(
-                    "f4ffmpeg could not load Nuka-World Nuka-Cola screen NIF '{}'; disabling screen injection for this session.",
-                    nukaColaMachineScreenNif
+                    "f4ffmpeg could not resolve Nuka-World screen source form '{}'; disabling screen injection for this session.",
+                    nukaColaMachineScreenSourceForm
                 );
                 nukaColaMachineScreenInjectionEnabled = false;
                 return false;
             }
 
-            auto* loadedRoot = getFirstLoadedNifObject(stream);
-            auto* screenNode = loadedRoot != nullptr
-                ? loadedRoot->IsNode()
+            RE::NiPointer<RE::NiAVObject> screenRoot;
+            sourceForm->Clone3D(&reference, screenRoot);
+
+            auto* screenNode = screenRoot != nullptr
+                ? screenRoot->IsNode()
                 : nullptr;
             if (screenNode == nullptr)
             {
                 REX::WARN(
-                    "f4ffmpeg Nuka-World Nuka-Cola screen NIF '{}' has no root NiNode; disabling screen injection for this session.",
-                    nukaColaMachineScreenNif
+                    "f4ffmpeg could not clone Nuka-World screen source form '{}'; disabling screen injection for this session.",
+                    nukaColaMachineScreenSourceForm
                 );
                 nukaColaMachineScreenInjectionEnabled = false;
                 return false;
@@ -4761,6 +4736,8 @@ namespace f4ffmpeg
 
                 nukaColaMachineScreenInjectionEnabled =
                     config::enableNukaColaMachineScreens.GetValue();
+                nukaColaMachineScreenSourceForm =
+                    config::nukaColaMachineScreenSourceForm.GetValue();
                 nukaColaMachineScreenSanitization = lowercasePath(
                     config::nukaColaMachineScreenSanitization.GetValue()
                 );
@@ -4817,9 +4794,9 @@ namespace f4ffmpeg
                             std::addressof(nukaColaMachineCellEventSink)
                         );
                         REX::INFO(
-                            "f4ffmpeg Nuka-Cola screen injection enabled for {} base form(s), Nuka-World NIF='{}', sanitization={}.",
+                            "f4ffmpeg Nuka-Cola screen injection enabled for {} base form(s), Nuka-World source form='{}', sanitization={}.",
                             nukaColaMachineScreenTargets.size(),
-                            nukaColaMachineScreenNif,
+                            nukaColaMachineScreenSourceForm,
                             nukaColaMachineScreenSanitization
                         );
                     }

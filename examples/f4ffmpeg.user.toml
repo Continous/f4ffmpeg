@@ -12,6 +12,7 @@ UsePlaylistTransitionMethod = true
 # base forms after their cells load. Nuka-World must be installed.
 EnableNukaColaMachineScreens = false
 NukaColaMachineScreenTargets = []
+NukaColaMachineScreenSourceForm = "NukaColaMachineCommercialFx"
 
 # "Never", "OutsideNukaWorld", or "Everywhere". Sanitization removes the
 # injected NIF's controller chain, including its commercial autoplay sound.

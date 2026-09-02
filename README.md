@@ -34,7 +34,7 @@ Playlist INIs may include `[Location.<BGSLocation editor ID>]` blocks, with opti
 
 ### Nuka-Cola machine screens
 
-`[Extra]` can attach Nuka-World's `NukaColaMachineCommercialFx.nif` to an allowlist of compatible machine **base-form editor IDs** when their cells finish loading. Enable it with `EnableNukaColaMachineScreens` and list forms in `NukaColaMachineScreenTargets`. The mesh is loaded at runtime from Nuka-World's BSA/loose-file stack; if it is unavailable, screen injection is disabled for that session. The NIF's screen texture is replaced through the normal `Data/Video/actors/dlc04/nukatron/nukaandcappycommercial01_d.*` mapping.
+`[Extra]` can attach Nuka-World's commercial-screen 3D to an allowlist of compatible machine **base-form editor IDs** when their cells finish loading. Enable it with `EnableNukaColaMachineScreens` and list forms in `NukaColaMachineScreenTargets`. Fallout loads the `NukaColaMachineScreenSourceForm` base form (default `NukaColaMachineCommercialFx`) through its normal BSA/loose-file stack; if the DLC asset cannot be resolved or cloned, screen injection is disabled for that session. The NIF's screen texture is replaced through the normal `Data/Video/actors/dlc04/nukatron/nukaandcappycommercial01_d.*` mapping.
 
 `NukaColaMachineScreenSanitization` is `Never`, `OutsideNukaWorld`, or `Everywhere`. Sanitization removes the injected NIF's root controller chain, which suppresses its commercial animation and autoplay sound while retaining the screen geometry. `NukaWorldLocationEditorIds` controls what counts as Nuka-World territory.
 

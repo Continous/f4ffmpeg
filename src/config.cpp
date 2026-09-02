@@ -74,9 +74,11 @@ namespace f4ffmpeg::config
 
         spdlog::debug(
             "Extra.EnableNukaColaMachineScreens={}, Extra.NukaColaMachineScreenTargets={}, "
+            "Extra.NukaColaMachineScreenSourceForm={}, "
             "Extra.NukaColaMachineScreenSanitization={}",
             enableNukaColaMachineScreens.GetValue(),
             nukaColaMachineScreenTargets.GetValue().size(),
+            nukaColaMachineScreenSourceForm.GetValue(),
             nukaColaMachineScreenSanitization.GetValue()
         );
     }
