@@ -6,3 +6,14 @@ FallbackTransitionMethod = "VanillaDDS"
 
 # If false, all playlist-side transition Method/Image metadata is ignored.
 UsePlaylistTransitionMethod = true
+
+[Extra]
+# Attach Nuka-World's Nuka-Cola commercial-screen NIF to compatible machine
+# base forms after their cells load. Nuka-World must be installed.
+EnableNukaColaMachineScreens = false
+NukaColaMachineScreenTargets = []
+
+# "Never", "OutsideNukaWorld", or "Everywhere". Sanitization removes the
+# injected NIF's controller chain, including its commercial autoplay sound.
+NukaColaMachineScreenSanitization = "OutsideNukaWorld"
+NukaWorldLocationEditorIds = ["DLC04NukaWorld"]

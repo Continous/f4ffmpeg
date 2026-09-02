@@ -21,6 +21,21 @@ namespace f4ffmpeg
         image
     };
 
+    // A location block only changes fields it explicitly provides. This lets a
+    // location add media to, or replace, a playlist without duplicating its
+    // global playback policy.
+    struct locationPlaybackSettings
+    {
+        std::string locationEditorId;
+        bool overridePlaylist = false;
+        std::optional<bool> looping;
+        std::optional<bool> shuffle;
+        std::vector<std::string> playlist;
+        bool hasPlaylist = false;
+        std::optional<transitionMethod> transition;
+        std::optional<std::string> transitionImage;
+    };
+
     struct videoPlaybackSettings
     {
         // Preserve original f4ffmpeg behavior when no sidecar INI exists.
@@ -32,6 +47,7 @@ namespace f4ffmpeg
         // evaluated by manager when a decoder source transition begins.
         std::optional<transitionMethod> transition;
         std::optional<std::string> transitionImage;
+        std::vector<locationPlaybackSettings> locationOverrides;
     };
 
     struct transitionPresentation

@@ -71,5 +71,13 @@ namespace f4ffmpeg::config
             disableWorkshopTVStatic.GetValue(),
             disableWorkshopTVWarp.GetValue()
         );
+
+        spdlog::debug(
+            "Extra.EnableNukaColaMachineScreens={}, Extra.NukaColaMachineScreenTargets={}, "
+            "Extra.NukaColaMachineScreenSanitization={}",
+            enableNukaColaMachineScreens.GetValue(),
+            nukaColaMachineScreenTargets.GetValue().size(),
+            nukaColaMachineScreenSanitization.GetValue()
+        );
     }
 }

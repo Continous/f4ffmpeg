@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include <REX/TTomlSetting.h>
 
 namespace f4ffmpeg::config
@@ -67,6 +68,35 @@ namespace f4ffmpeg::config
         "Textures",
         "DisableWorkshopTVWarp",
         false
+    };
+
+    // Optional Nuka-World commercial-screen injection for configured machine
+    // base-form editor IDs. The NIF is intentionally opt-in because its local
+    // transform only fits compatible machine models.
+    inline REX::TTomlSetting<bool> enableNukaColaMachineScreens{
+        "Extra",
+        "EnableNukaColaMachineScreens",
+        false
+    };
+
+    inline REX::TTomlSetting<std::vector<std::string>> nukaColaMachineScreenTargets{
+        "Extra",
+        "NukaColaMachineScreenTargets",
+        {}
+    };
+
+    // Never, OutsideNukaWorld, or Everywhere. Sanitization disables the
+    // injected NIF's controller chain, including its autoplay sound event.
+    inline REX::TTomlSetting<std::string> nukaColaMachineScreenSanitization{
+        "Extra",
+        "NukaColaMachineScreenSanitization",
+        "OutsideNukaWorld"
+    };
+
+    inline REX::TTomlSetting<std::vector<std::string>> nukaWorldLocationEditorIds{
+        "Extra",
+        "NukaWorldLocationEditorIds",
+        {"DLC04NukaWorld"}
     };
 
     inline REX::TTomlSetting<std::string> debugDecodeKey{

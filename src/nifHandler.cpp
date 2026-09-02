@@ -31,10 +31,15 @@
 #include <RE/B/BSShaderProperty.h>
 #include <RE/B/BSShaderTextureSet.h>
 #include <RE/B/BSTextureSet.h>
+#include <RE/T/TESCellFullyLoadedEvent.h>
+#include <RE/T/TESObjectREFR.h>
 #include <RE/N/NiAVObject.h>
 #include <RE/N/NiNode.h>
 #include <RE/N/NiPointer.h>
+#include <RE/N/NiStream.h>
 #include <RE/N/NiTexture.h>
+#include <RE/P/PlayerCharacter.h>
+#include <RE/B/BGSLocation.h>
 #include <REL/Relocation.h>
 #include <REX/FModule.h>
 #include <REX/W32/D3D11.h>
@@ -58,6 +63,11 @@ namespace f4ffmpeg
 
         constexpr std::string_view workshopTvRasterScanTexture =
             "textures\\effects\\tvanim\\rasterscananim_d.dds";
+
+        // This mesh is supplied by Nuka-World. Pass a game-relative mesh path
+        // to NiStream so Fallout can resolve it from its loose-file/BSA stack.
+        constexpr std::string_view nukaColaMachineScreenNif =
+            "meshes\\actors\\dlc04\\nukatron\\nukacolamachinecommercialfx.nif";
 
         // Keep .mov first for backward-compatible collision precedence.
         // The decoder itself is FFmpeg-backed; nifHandler only needs to avoid
@@ -395,6 +405,55 @@ namespace f4ffmpeg
             return std::nullopt;
         }
 
+        struct parsedLocationSection
+        {
+            std::string editorId;
+            std::string subsection;
+        };
+
+        std::optional<parsedLocationSection> parseLocationSection(
+            std::string_view section)
+        {
+            constexpr std::string_view prefix = "location.";
+
+            if (!startsWithInsensitive(section, prefix))
+                return std::nullopt;
+
+            const std::string_view remainder =
+                section.substr(prefix.size());
+            const auto separator = remainder.find('.');
+            const std::string_view editorId =
+                remainder.substr(0, separator);
+
+            if (editorId.empty())
+                return std::nullopt;
+
+            return parsedLocationSection{
+                std::string{editorId},
+                separator == std::string_view::npos
+                    ? std::string{}
+                    : std::string{remainder.substr(separator + 1)}
+            };
+        }
+
+        locationPlaybackSettings* getLocationOverride(
+            videoPlaybackSettings& settings,
+            std::string_view editorId)
+        {
+            const std::string normalized = lowercasePath(editorId);
+
+            for (auto& overrideSettings : settings.locationOverrides)
+            {
+                if (lowercasePath(overrideSettings.locationEditorId) == normalized)
+                    return std::addressof(overrideSettings);
+            }
+
+            settings.locationOverrides.emplace_back();
+            auto& overrideSettings = settings.locationOverrides.back();
+            overrideSettings.locationEditorId = std::string{editorId};
+            return std::addressof(overrideSettings);
+        }
+
         void appendPlaylistEntry(
             videoPlaybackSettings& settings,
             const std::filesystem::path& iniPath,
@@ -603,6 +662,132 @@ namespace f4ffmpeg
                             equals + 1
                         )
                     );
+
+                if (const auto locationSection =
+                        parseLocationSection(section))
+                {
+                    auto* locationSettings = getLocationOverride(
+                        settings,
+                        locationSection->editorId
+                    );
+
+                    const bool locationPlaybackSection =
+                        locationSection->subsection.empty() ||
+                        locationSection->subsection == "playback";
+                    const bool locationTransitionSection =
+                        locationSection->subsection == "transition";
+                    const bool locationPlaylistSection =
+                        locationSection->subsection == "playlist";
+
+                    if (locationPlaybackSection && key == "mode")
+                    {
+                        const std::string mode = lowercasePath(value);
+
+                        if (mode == "add")
+                            locationSettings->overridePlaylist = false;
+                        else if (mode == "override")
+                            locationSettings->overridePlaylist = true;
+                        else
+                            REX::WARN(
+                                "f4ffmpeg ignored invalid location Mode '{}' on line {} of '{}'.",
+                                value,
+                                lineNumber,
+                                iniPath.string()
+                            );
+
+                        continue;
+                    }
+
+                    if (locationPlaybackSection &&
+                        (key == "loop" || key == "looping"))
+                    {
+                        const auto parsed = parseIniBool(value);
+                        if (parsed)
+                            locationSettings->looping = *parsed;
+                        else
+                            REX::WARN(
+                                "f4ffmpeg ignored invalid location Loop value '{}' on line {} of '{}'.",
+                                value,
+                                lineNumber,
+                                iniPath.string()
+                            );
+                        continue;
+                    }
+
+                    if (locationPlaybackSection && key == "shuffle")
+                    {
+                        const auto parsed = parseIniBool(value);
+                        if (parsed)
+                            locationSettings->shuffle = *parsed;
+                        else
+                            REX::WARN(
+                                "f4ffmpeg ignored invalid location Shuffle value '{}' on line {} of '{}'.",
+                                value,
+                                lineNumber,
+                                iniPath.string()
+                            );
+                        continue;
+                    }
+
+                    if ((locationTransitionSection &&
+                         (key == "method" || key == "mode")) ||
+                        (locationPlaybackSection && key == "transitionmethod"))
+                    {
+                        const auto parsed = parseTransitionMethod(value, true);
+                        if (parsed)
+                            locationSettings->transition = *parsed;
+                        else
+                            REX::WARN(
+                                "f4ffmpeg ignored invalid location transition method '{}' on line {} of '{}'.",
+                                value,
+                                lineNumber,
+                                iniPath.string()
+                            );
+                        continue;
+                    }
+
+                    if ((locationTransitionSection &&
+                         (key == "image" || key == "file")) ||
+                        (locationPlaybackSection && key == "transitionimage"))
+                    {
+                        videoPlaybackSettings temporary{};
+                        setPlaylistTransitionImage(
+                            temporary,
+                            iniPath,
+                            value,
+                            lineNumber
+                        );
+                        locationSettings->transitionImage =
+                            std::move(temporary.transitionImage);
+                        continue;
+                    }
+
+                    if ((locationPlaybackSection &&
+                         (key == "playlist" || key == "playlistitem")) ||
+                        (locationPlaylistSection &&
+                         (key == "item" || key == "entry" || key == "file")))
+                    {
+                        videoPlaybackSettings temporary{};
+                        appendPlaylistEntry(temporary, iniPath, value);
+                        if (!temporary.playlist.empty())
+                        {
+                            locationSettings->playlist.emplace_back(
+                                std::move(temporary.playlist.front())
+                            );
+                            locationSettings->hasPlaylist = true;
+                        }
+                        continue;
+                    }
+
+                    REX::WARN(
+                        "f4ffmpeg ignored unknown location playback INI setting '{}={}' in section [{}] of '{}'.",
+                        key,
+                        value,
+                        section,
+                        iniPath.string()
+                    );
+                    continue;
+                }
 
                 const bool playbackSection =
                     section.empty() ||
@@ -813,6 +998,47 @@ namespace f4ffmpeg
             settings.playlist =
                 std::move(validatedPlaylist);
 
+            for (auto& locationSettings : settings.locationOverrides)
+            {
+                std::vector<std::string> validatedLocationPlaylist;
+                validatedLocationPlaylist.reserve(
+                    locationSettings.playlist.size()
+                );
+
+                for (const auto& entry : locationSettings.playlist)
+                {
+                    const std::filesystem::path entryPath{entry};
+                    std::error_code entryError;
+
+                    if (!isSupportedVideoPath(entryPath) ||
+                        !std::filesystem::is_regular_file(entryPath, entryError))
+                    {
+                        REX::WARN(
+                            "f4ffmpeg ignored invalid location playlist media '{}' for location '{}' from '{}'.",
+                            entry,
+                            locationSettings.locationEditorId,
+                            iniPath.string()
+                        );
+                        continue;
+                    }
+
+                    validatedLocationPlaylist.emplace_back(entry);
+                }
+
+                locationSettings.playlist =
+                    std::move(validatedLocationPlaylist);
+
+                if (locationSettings.transition == transitionMethod::image &&
+                    !locationSettings.transitionImage)
+                {
+                    REX::WARN(
+                        "f4ffmpeg location '{}' requested transition Method=Image without an Image in '{}'.",
+                        locationSettings.locationEditorId,
+                        iniPath.string()
+                    );
+                }
+            }
+
             if (
                 settings.transitionImage &&
                 settings.transition != transitionMethod::image)
@@ -951,6 +1177,7 @@ namespace f4ffmpeg
             std::string playbackKey;
 
             videoPlaybackSettings playbackSettings;
+            bool standalonePlaylist = false;
         };
 
         struct resolvedVideoTarget
@@ -964,6 +1191,72 @@ namespace f4ffmpeg
             videoPlaybackSettings playbackSettings;
         };
 
+        struct resolvedLocationPlaybackSettings
+        {
+            videoPlaybackSettings settings;
+            std::string locationKey;
+        };
+
+        resolvedLocationPlaybackSettings resolveLocationPlaybackSettings(
+            const videoPlaybackSettings& baseSettings)
+        {
+            resolvedLocationPlaybackSettings result{baseSettings, {}};
+            result.settings.locationOverrides.clear();
+
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            auto* location = player != nullptr
+                ? player->currentLocation
+                : nullptr;
+
+            for (; location != nullptr; location = location->parentLoc)
+            {
+                const char* editorId = location->GetFormEditorID();
+                if (editorId == nullptr || *editorId == '\0')
+                    continue;
+
+                const std::string locationKey = lowercasePath(editorId);
+                const auto overrideIt = std::find_if(
+                    baseSettings.locationOverrides.begin(),
+                    baseSettings.locationOverrides.end(),
+                    [&locationKey](const auto& candidate)
+                    {
+                        return lowercasePath(candidate.locationEditorId) ==
+                            locationKey;
+                    }
+                );
+
+                if (overrideIt == baseSettings.locationOverrides.end())
+                    continue;
+
+                const auto& locationSettings = *overrideIt;
+                if (locationSettings.looping)
+                    result.settings.looping = *locationSettings.looping;
+                if (locationSettings.shuffle)
+                    result.settings.shuffle = *locationSettings.shuffle;
+                if (locationSettings.transition)
+                    result.settings.transition = locationSettings.transition;
+                if (locationSettings.transitionImage)
+                    result.settings.transitionImage = locationSettings.transitionImage;
+
+                if (locationSettings.hasPlaylist)
+                {
+                    if (locationSettings.overridePlaylist)
+                        result.settings.playlist = locationSettings.playlist;
+                    else
+                        result.settings.playlist.insert(
+                            result.settings.playlist.end(),
+                            locationSettings.playlist.begin(),
+                            locationSettings.playlist.end()
+                        );
+                }
+
+                result.locationKey = locationKey;
+                return result;
+            }
+
+            return result;
+        }
+
         // Published once before hooks are installed, then read-only.
         std::unordered_map<
             std::string,
@@ -971,6 +1264,13 @@ namespace f4ffmpeg
             replacementIndex;
 
         std::mutex playbackRegistryMutex;
+
+        std::unordered_set<std::string> nukaColaMachineScreenTargets;
+        std::unordered_set<std::string> nukaWorldLocationEditorIds;
+        std::unordered_set<RE::TESFormID> injectedNukaColaMachineReferences;
+        std::mutex injectedNukaColaMachineReferencesMutex;
+        bool nukaColaMachineScreenInjectionEnabled = false;
+        std::string nukaColaMachineScreenSanitization;
 
         std::unordered_map<
             std::string,
@@ -1011,6 +1311,10 @@ namespace f4ffmpeg
 
         void requestPlaybackActivation(
             std::string_view playbackKey);
+        void ensurePlaybackActivationRecord(
+            std::string_view playbackKey,
+            std::string_view videoPath,
+            const videoPlaybackSettings& playbackSettings);
         void activationWorkerMain();
 
         void registerIndexedReplacement(
@@ -1148,6 +1452,169 @@ namespace f4ffmpeg
                 );
             }
         }
+
+        template <class T>
+        struct niLargeArrayLayout
+        {
+            void* vtable = nullptr;
+            T* data = nullptr;
+            std::uint32_t capacity = 0;
+            std::uint32_t freeIndex = 0;
+            std::uint32_t size = 0;
+            std::uint32_t growBy = 0;
+        };
+
+        static_assert(sizeof(niLargeArrayLayout<RE::NiPointer<RE::NiObject>>) ==
+            0x20);
+
+        RE::NiObject* getFirstLoadedNifObject(RE::NiStream& stream)
+        {
+            auto* objects = reinterpret_cast<niLargeArrayLayout<
+                RE::NiPointer<RE::NiObject>>*>(
+                    std::addressof(stream.topObjects)
+                );
+
+            if (objects->data == nullptr || objects->size == 0)
+                return nullptr;
+
+            return objects->data[0].get();
+        }
+
+        bool isNukaWorldLocation(const RE::BGSLocation* location)
+        {
+            for (; location != nullptr; location = location->parentLoc)
+            {
+                const char* editorId = location->GetFormEditorID();
+                if (editorId != nullptr &&
+                    nukaWorldLocationEditorIds.contains(lowercasePath(editorId)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        bool shouldSanitizeNukaColaMachineScreen(
+            const RE::TESObjectREFR& reference)
+        {
+            if (nukaColaMachineScreenSanitization == "everywhere")
+                return true;
+            if (nukaColaMachineScreenSanitization != "outsidenukaworld")
+                return false;
+
+            return !isNukaWorldLocation(reference.GetCurrentLocation());
+        }
+
+        bool injectNukaColaMachineScreen(RE::TESObjectREFR& reference)
+        {
+            auto* root = reference.Get3D();
+            if (root == nullptr)
+                return false;
+
+            RE::NiStream stream{};
+            REX::EMPLACE_VTABLE(std::addressof(stream));
+
+            if (!stream.Load(nukaColaMachineScreenNif.data()))
+            {
+                REX::WARN(
+                    "f4ffmpeg could not load Nuka-World Nuka-Cola screen NIF '{}'; disabling screen injection for this session.",
+                    nukaColaMachineScreenNif
+                );
+                nukaColaMachineScreenInjectionEnabled = false;
+                return false;
+            }
+
+            auto* loadedRoot = getFirstLoadedNifObject(stream);
+            auto* screenNode = loadedRoot != nullptr
+                ? loadedRoot->IsNode()
+                : nullptr;
+            if (screenNode == nullptr)
+            {
+                REX::WARN(
+                    "f4ffmpeg Nuka-World Nuka-Cola screen NIF '{}' has no root NiNode; disabling screen injection for this session.",
+                    nukaColaMachineScreenNif
+                );
+                nukaColaMachineScreenInjectionEnabled = false;
+                return false;
+            }
+
+            if (shouldSanitizeNukaColaMachineScreen(reference))
+            {
+                // The supplied NIF's controller manager drives its commercial,
+                // including the autoplay sound event. Removing the root chain
+                // leaves the screen geometry intact without those side effects.
+                screenNode->controllers.reset();
+            }
+
+            auto* parent = root->IsNode();
+            if (parent == nullptr)
+            {
+                REX::WARN(
+                    "f4ffmpeg cannot attach a Nuka-Cola screen to reference {:08X}: its 3D root is not a NiNode.",
+                    reference.GetFormID()
+                );
+                return false;
+            }
+
+            parent->AttachChild(screenNode, false);
+            REX::INFO(
+                "f4ffmpeg attached Nuka-Cola commercial screen to reference {:08X} (sanitized={}).",
+                reference.GetFormID(),
+                shouldSanitizeNukaColaMachineScreen(reference)
+            );
+            return true;
+        }
+
+        class nukaColaMachineCellSink final :
+            public RE::BSTEventSink<RE::TESCellFullyLoadedEvent>
+        {
+        public:
+            RE::BSEventNotifyControl ProcessEvent(
+                const RE::TESCellFullyLoadedEvent& event,
+                RE::BSTEventSource<RE::TESCellFullyLoadedEvent>*) override
+            {
+                if (!nukaColaMachineScreenInjectionEnabled || event.cell == nullptr)
+                    return RE::BSEventNotifyControl::kContinue;
+
+                event.cell->ForEachReference(
+                    [](RE::TESObjectREFR* reference)
+                    {
+                        if (reference == nullptr)
+                            return RE::BSContainer::ForEachResult::kContinue;
+
+                        auto* baseObject = reference->GetObjectReference();
+                        const char* editorId = baseObject != nullptr
+                            ? baseObject->GetFormEditorID()
+                            : nullptr;
+                        if (editorId == nullptr ||
+                            !nukaColaMachineScreenTargets.contains(lowercasePath(editorId)))
+                        {
+                            return RE::BSContainer::ForEachResult::kContinue;
+                        }
+
+                        const auto formId = reference->GetFormID();
+                        {
+                            std::scoped_lock lock(injectedNukaColaMachineReferencesMutex);
+                            if (injectedNukaColaMachineReferences.contains(formId))
+                                return RE::BSContainer::ForEachResult::kContinue;
+                        }
+
+                        if (injectNukaColaMachineScreen(*reference))
+                        {
+                            std::scoped_lock lock(injectedNukaColaMachineReferencesMutex);
+                            injectedNukaColaMachineReferences.emplace(formId);
+                        }
+
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    }
+                );
+
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+
+        nukaColaMachineCellSink nukaColaMachineCellEventSink;
 
         bool buildReplacementIndex()
         {
@@ -1324,7 +1791,8 @@ namespace f4ffmpeg
                     const std::string& relativeStem,
                     const std::string& initialVideoPath,
                     const std::string& playbackKey,
-                    const videoPlaybackSettings& playbackSettings)
+                    const videoPlaybackSettings& playbackSettings,
+                    bool standalonePlaylist)
                 {
                     std::string textureStem{
                         texturesPrefix
@@ -1351,7 +1819,8 @@ namespace f4ffmpeg
                             videoTargetMode::vanillaOverride,
                             initialVideoPath,
                             playbackKey,
-                            playbackSettings
+                            playbackSettings,
+                            standalonePlaylist
                         }
                     );
 
@@ -1361,7 +1830,8 @@ namespace f4ffmpeg
                             videoTargetMode::directTextureSwap,
                             initialVideoPath,
                             playbackKey,
-                            playbackSettings
+                            playbackSettings,
+                            standalonePlaylist
                         }
                     );
                 };
@@ -1391,7 +1861,8 @@ namespace f4ffmpeg
                     *relativeStem,
                     physicalVideoPath,
                     physicalVideoPath,
-                    playbackSettings
+                    playbackSettings,
+                    false
                 );
 
                 ++activeVideos;
@@ -1441,7 +1912,8 @@ namespace f4ffmpeg
                     *relativeStem,
                     initialVideoPath,
                     iniPath.string(),
-                    playbackSettings
+                    playbackSettings,
+                    true
                 );
 
                 ++activePlaylists;
@@ -1533,12 +2005,30 @@ namespace f4ffmpeg
             if (replacement == replacementIndex.end())
                 return std::nullopt;
 
+            auto locationSettings = resolveLocationPlaybackSettings(
+                replacement->second.playbackSettings
+            );
+
+            std::string videoPath = replacement->second.videoPath;
+            if (replacement->second.standalonePlaylist &&
+                !locationSettings.settings.playlist.empty())
+            {
+                videoPath = locationSettings.settings.playlist.front();
+            }
+
+            std::string playbackKey = replacement->second.playbackKey;
+            if (!locationSettings.locationKey.empty())
+            {
+                playbackKey += "|location:";
+                playbackKey += locationSettings.locationKey;
+            }
+
             return resolvedVideoTarget{
                 replacement->second.mode,
                 std::move(normalized),
-                replacement->second.videoPath,
-                replacement->second.playbackKey,
-                replacement->second.playbackSettings
+                std::move(videoPath),
+                std::move(playbackKey),
+                std::move(locationSettings.settings)
             };
         }
 
@@ -1601,6 +2091,27 @@ namespace f4ffmpeg
             );
 
             activationQueueCv.notify_one();
+        }
+
+        void ensurePlaybackActivationRecord(
+            std::string_view playbackKey,
+            std::string_view videoPath,
+            const videoPlaybackSettings& playbackSettings)
+        {
+            if (playbackKey.empty() || videoPath.empty())
+                return;
+
+            const std::string identityKey = lowercasePath(playbackKey);
+            std::scoped_lock activationLock(activationRegistryMutex);
+
+            if (activationByIdentity.contains(identityKey))
+                return;
+
+            auto record = std::make_shared<managerActivationRecord>();
+            record->playbackKey = playbackKey;
+            record->videoPath = videoPath;
+            record->playbackSettings = playbackSettings;
+            activationByIdentity.emplace(identityKey, std::move(record));
         }
 
         void activationWorkerMain()
@@ -3681,6 +4192,15 @@ namespace f4ffmpeg
                 if (!target)
                     continue;
 
+                // A vanilla SRV is shared by every instance of a texture. Resolve
+                // again at draw time so a player location change selects that
+                // location's manager instead of the target first seen on load.
+                if (const auto locationTarget = getVideoTargetForTexture(
+                        target->getTexturePath().c_str()))
+                {
+                    target = locationTarget;
+                }
+
                 const auto transition =
                     target->getTransitionPresentation();
 
@@ -4062,10 +4582,16 @@ namespace f4ffmpeg
         if (!resolved)
             return nullptr;
 
-        const std::string textureKey =
-            lowercasePath(
-                resolved->texturePath
-            );
+        std::string textureKey =
+            lowercasePath(resolved->texturePath);
+        textureKey += "|";
+        textureKey += lowercasePath(resolved->playbackKey);
+
+        ensurePlaybackActivationRecord(
+            resolved->playbackKey,
+            resolved->videoPath,
+            resolved->playbackSettings
+        );
 
         std::scoped_lock lock(
             targetRegistryMutex
@@ -4232,6 +4758,72 @@ namespace f4ffmpeg
 
                 workshopTvWarpSuppressionEnabled =
                     config::disableWorkshopTVWarp.GetValue();
+
+                nukaColaMachineScreenInjectionEnabled =
+                    config::enableNukaColaMachineScreens.GetValue();
+                nukaColaMachineScreenSanitization = lowercasePath(
+                    config::nukaColaMachineScreenSanitization.GetValue()
+                );
+
+                for (const auto& editorId :
+                     config::nukaColaMachineScreenTargets.GetValue())
+                {
+                    if (!editorId.empty())
+                        nukaColaMachineScreenTargets.emplace(
+                            lowercasePath(editorId)
+                        );
+                }
+
+                for (const auto& editorId :
+                     config::nukaWorldLocationEditorIds.GetValue())
+                {
+                    if (!editorId.empty())
+                        nukaWorldLocationEditorIds.emplace(
+                            lowercasePath(editorId)
+                        );
+                }
+
+                if (nukaColaMachineScreenSanitization != "never" &&
+                    nukaColaMachineScreenSanitization != "outsidenukaworld" &&
+                    nukaColaMachineScreenSanitization != "everywhere")
+                {
+                    REX::WARN(
+                        "f4ffmpeg unknown Extra.NukaColaMachineScreenSanitization '{}'; using OutsideNukaWorld.",
+                        config::nukaColaMachineScreenSanitization.GetValue()
+                    );
+                    nukaColaMachineScreenSanitization = "outsidenukaworld";
+                }
+
+                if (nukaColaMachineScreenInjectionEnabled &&
+                    nukaColaMachineScreenTargets.empty())
+                {
+                    REX::WARN(
+                        "f4ffmpeg Nuka-Cola screen injection is enabled but Extra.NukaColaMachineScreenTargets is empty."
+                    );
+                }
+                else if (nukaColaMachineScreenInjectionEnabled)
+                {
+                    auto* cellEventSource =
+                        RE::TESCellFullyLoadedEvent::GetEventSource();
+                    if (cellEventSource == nullptr)
+                    {
+                        REX::WARN(
+                            "f4ffmpeg could not register Nuka-Cola screen injection: cell event source is unavailable."
+                        );
+                    }
+                    else
+                    {
+                        cellEventSource->RegisterSink(
+                            std::addressof(nukaColaMachineCellEventSink)
+                        );
+                        REX::INFO(
+                            "f4ffmpeg Nuka-Cola screen injection enabled for {} base form(s), Nuka-World NIF='{}', sanitization={}.",
+                            nukaColaMachineScreenTargets.size(),
+                            nukaColaMachineScreenNif,
+                            nukaColaMachineScreenSanitization
+                        );
+                    }
+                }
 
                 REX::INFO(
                     "f4ffmpeg target-local workshop-TV effects: raster scan={}, static/fuzz={}, warp={}.",
