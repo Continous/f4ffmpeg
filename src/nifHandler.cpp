@@ -66,6 +66,12 @@ namespace f4ffmpeg
         constexpr std::string_view workshopTvRasterScanTexture =
             "textures\\effects\\tvanim\\rasterscananim_d.dds";
 
+        // The supplied commercial-effect NIF names its screen subtree this way.
+        // A full Nuka-Cola machine source form can contain other geometry, which
+        // must never be attached to an unrelated target machine.
+        constexpr std::string_view nukaColaMachineScreenNodeName =
+            "NukaColaMachineCommercialFx";
+
 
         // Keep .mov first for backward-compatible collision precedence.
         // The decoder itself is FFmpeg-backed; nifHandler only needs to avoid
@@ -1614,10 +1620,7 @@ namespace f4ffmpeg
             );
             sourceForm->Clone3D(&reference, screenRoot);
 
-            auto* screenNode = screenRoot != nullptr
-                ? screenRoot->IsNode()
-                : nullptr;
-            if (screenNode == nullptr)
+            if (screenRoot == nullptr)
             {
                 REX::WARN(
                     "f4ffmpeg could not clone Nuka-World screen source form '{}'; disabling screen injection for this session.",
@@ -1627,12 +1630,52 @@ namespace f4ffmpeg
                 return false;
             }
 
+            const RE::BSFixedString screenNodeName{
+                nukaColaMachineScreenNodeName.data()
+            };
+            auto* screenOverlay = screenRoot->GetObjectByName(screenNodeName);
+
+            if (screenOverlay == nullptr || screenOverlay == screenRoot.get())
+            {
+                const char* rootName = screenRoot->name.c_str();
+                REX::WARN(
+                    "f4ffmpeg source form '{}' did not expose a distinct '{}' screen subtree (root='{}'); refusing to attach its full machine hierarchy.",
+                    nukaColaMachineScreenSourceForm,
+                    nukaColaMachineScreenNodeName,
+                    rootName != nullptr ? rootName : "<unnamed>"
+                );
+
+                if (auto* sourceRootNode = screenRoot->IsNode())
+                {
+                    for (const auto& child : sourceRootNode->children)
+                    {
+                        if (!child)
+                            continue;
+
+                        REX::INFO(
+                            "f4ffmpeg Nuka-Cola source root child: '{}'.",
+                            child->name.c_str() != nullptr
+                                ? child->name.c_str()
+                                : "<unnamed>"
+                        );
+                    }
+                }
+
+                return false;
+            }
+
+            // Detach only the selected screen subtree from the temporary source
+            // clone. Keeping a strong reference bridges the detach/attach pair.
+            RE::NiPointer<RE::NiAVObject> screenAttachment{screenOverlay};
+            if (screenOverlay->parent != nullptr)
+                screenOverlay->parent->DetachChild(screenOverlay);
+
             if (shouldSanitizeNukaColaMachineScreen(reference))
             {
                 // The supplied NIF's controller manager drives its commercial,
                 // including the autoplay sound event. Removing the root chain
                 // leaves the screen geometry intact without those side effects.
-                screenNode->controllers.reset();
+                screenOverlay->controllers.reset();
             }
 
             auto* parent = root->IsNode();
@@ -1649,7 +1692,7 @@ namespace f4ffmpeg
                 "f4ffmpeg attaching Nuka-Cola commercial screen to reference {:08X}.",
                 reference.GetFormID()
             );
-            parent->AttachChild(screenNode, false);
+            parent->AttachChild(screenAttachment.get(), false);
             REX::INFO(
                 "f4ffmpeg attached Nuka-Cola commercial screen to reference {:08X} (sanitized={}).",
                 reference.GetFormID(),
