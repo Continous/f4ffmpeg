@@ -105,7 +105,7 @@ end
 
 -- set project constants
 set_project("f4ffmpeg")
-set_version("0.0.1")
+set_version("0.3.0")
 set_license("GPL-3.0")
 set_languages("c11", "c++23")
 set_warnings("allextra")
