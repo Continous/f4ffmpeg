@@ -1267,6 +1267,7 @@ namespace f4ffmpeg
         std::mutex injectedNukaColaMachineReferencesMutex;
         bool nukaColaMachineScreenInjectionEnabled = false;
         std::string nukaColaMachineScreenSourceForm;
+        RE::TESBoundObject* nukaColaMachineScreenSource = nullptr;
         std::string nukaColaMachineScreenSanitization;
 
         std::unordered_map<
@@ -1476,19 +1477,29 @@ namespace f4ffmpeg
             return !isNukaWorldLocation(reference.GetCurrentLocation());
         }
 
-        bool injectNukaColaMachineScreen(RE::TESObjectREFR& reference)
+        bool isNukaColaMachineScreenTarget(
+            const RE::TESObjectREFR& reference)
         {
-            auto* root = reference.Get3D();
+            const auto* baseObject = reference.GetObjectReference();
+            const char* editorId = baseObject != nullptr
+                ? baseObject->GetFormEditorID()
+                : nullptr;
+
+            return editorId != nullptr &&
+                nukaColaMachineScreenTargets.contains(lowercasePath(editorId));
+        }
+
+        bool injectNukaColaMachineScreen(
+            RE::TESObjectREFR& reference,
+            RE::NiAVObject* loadedRoot = nullptr)
+        {
+            auto* root = loadedRoot != nullptr
+                ? loadedRoot
+                : reference.Get3D();
             if (root == nullptr)
                 return false;
 
-            const RE::BSFixedString sourceEditorId{
-                nukaColaMachineScreenSourceForm.c_str()
-            };
-            auto* sourceForm = RE::TESForm::GetFormByEditorID<
-                RE::TESBoundObject>(sourceEditorId);
-
-            if (sourceForm == nullptr)
+            if (nukaColaMachineScreenSource == nullptr)
             {
                 REX::WARN(
                     "f4ffmpeg could not resolve Nuka-World screen source form '{}'; disabling screen injection for this session.",
@@ -1499,7 +1510,7 @@ namespace f4ffmpeg
             }
 
             RE::NiPointer<RE::NiAVObject> screenRoot;
-            sourceForm->Clone3D(&reference, screenRoot);
+            nukaColaMachineScreenSource->Clone3D(&reference, screenRoot);
 
             auto* screenNode = screenRoot != nullptr
                 ? screenRoot->IsNode()
@@ -1558,12 +1569,7 @@ namespace f4ffmpeg
                         if (reference == nullptr)
                             return RE::BSContainer::ForEachResult::kContinue;
 
-                        auto* baseObject = reference->GetObjectReference();
-                        const char* editorId = baseObject != nullptr
-                            ? baseObject->GetFormEditorID()
-                            : nullptr;
-                        if (editorId == nullptr ||
-                            !nukaColaMachineScreenTargets.contains(lowercasePath(editorId)))
+                        if (!isNukaColaMachineScreenTarget(*reference))
                         {
                             return RE::BSContainer::ForEachResult::kContinue;
                         }
@@ -1590,6 +1596,82 @@ namespace f4ffmpeg
         };
 
         nukaColaMachineCellSink nukaColaMachineCellEventSink;
+
+        using referenceLoad3D_t = RE::NiAVObject* (*) (
+            RE::TESObjectREFR*,
+            bool
+        );
+
+        REL::Relocation<referenceLoad3D_t> originalReferenceLoad3D;
+
+        RE::NiAVObject* referenceLoad3DHook(
+            RE::TESObjectREFR* reference,
+            bool backgroundLoading)
+        {
+            auto* root = originalReferenceLoad3D(reference, backgroundLoading);
+
+            if (!nukaColaMachineScreenInjectionEnabled ||
+                reference == nullptr ||
+                root == nullptr ||
+                !isNukaColaMachineScreenTarget(*reference))
+            {
+                return root;
+            }
+
+            const auto formId = reference->GetFormID();
+            {
+                std::scoped_lock lock(injectedNukaColaMachineReferencesMutex);
+                if (injectedNukaColaMachineReferences.contains(formId))
+                    return root;
+            }
+
+            REX::INFO(
+                "f4ffmpeg encountered Nuka-Cola screen target reference {:08X}; attaching commercial screen.",
+                formId
+            );
+
+            if (injectNukaColaMachineScreen(*reference, root))
+            {
+                std::scoped_lock lock(injectedNukaColaMachineReferencesMutex);
+                injectedNukaColaMachineReferences.emplace(formId);
+            }
+
+            return root;
+        }
+
+        bool installNukaColaMachineScreenHook()
+        {
+            if (!nukaColaMachineScreenInjectionEnabled)
+                return true;
+
+            constexpr std::size_t referenceLoad3DVtableIndex = 0x86;
+            REL::Relocation<std::uintptr_t> vtable{
+                RE::TESObjectREFR::VTABLE[0]
+            };
+
+            const auto original = *reinterpret_cast<const std::uintptr_t*>(
+                vtable.address() + sizeof(void*) * referenceLoad3DVtableIndex
+            );
+            if (original == 0)
+            {
+                REX::WARN(
+                    "f4ffmpeg could not resolve TESObjectREFR::Load3D; disabling Nuka-Cola screen injection."
+                );
+                nukaColaMachineScreenInjectionEnabled = false;
+                return false;
+            }
+
+            originalReferenceLoad3D = original;
+            vtable.write_vfunc(
+                referenceLoad3DVtableIndex,
+                referenceLoad3DHook
+            );
+
+            REX::INFO(
+                "f4ffmpeg TESObjectREFR::Load3D hook initialized for Nuka-Cola screen injection."
+            );
+            return true;
+        }
 
         bool buildReplacementIndex()
         {
@@ -4777,18 +4859,37 @@ namespace f4ffmpeg
                     REX::WARN(
                         "f4ffmpeg Nuka-Cola screen injection is enabled but Extra.NukaColaMachineScreenTargets is empty."
                     );
+                    nukaColaMachineScreenInjectionEnabled = false;
                 }
                 else if (nukaColaMachineScreenInjectionEnabled)
                 {
+                    const RE::BSFixedString sourceEditorId{
+                        nukaColaMachineScreenSourceForm.c_str()
+                    };
+                    nukaColaMachineScreenSource =
+                        RE::TESForm::GetFormByEditorID<RE::TESBoundObject>(
+                            sourceEditorId
+                        );
+
+                    if (nukaColaMachineScreenSource == nullptr)
+                    {
+                        REX::WARN(
+                            "f4ffmpeg could not resolve Extra.NukaColaMachineScreenSourceForm '{}'; disabling Nuka-Cola screen injection.",
+                            nukaColaMachineScreenSourceForm
+                        );
+                        nukaColaMachineScreenInjectionEnabled = false;
+                    }
+
                     auto* cellEventSource =
                         RE::TESCellFullyLoadedEvent::GetEventSource();
-                    if (cellEventSource == nullptr)
+                    if (nukaColaMachineScreenInjectionEnabled &&
+                        cellEventSource == nullptr)
                     {
                         REX::WARN(
                             "f4ffmpeg could not register Nuka-Cola screen injection: cell event source is unavailable."
                         );
                     }
-                    else
+                    else if (nukaColaMachineScreenInjectionEnabled)
                     {
                         cellEventSource->RegisterSink(
                             std::addressof(nukaColaMachineCellEventSink)
@@ -4828,6 +4929,13 @@ namespace f4ffmpeg
 
                 if (!installTextureHooks())
                     return;
+
+                if (!installNukaColaMachineScreenHook())
+                {
+                    REX::WARN(
+                        "f4ffmpeg Nuka-Cola screen injection is unavailable; normal texture replacement remains active."
+                    );
+                }
 
                 if (!installEffectTextureHook())
                 {
