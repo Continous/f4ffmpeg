@@ -3,6 +3,7 @@
 
 #include <spdlog/spdlog.h>
 #include <filesystem>
+#include <toml.hpp>
 
 namespace f4ffmpeg::config
 {
@@ -26,6 +27,21 @@ namespace f4ffmpeg::config
         }
     }
 
+    static void validateTomlFile(const char* path)
+    {
+        if (!std::filesystem::exists(path))
+            return;
+
+        if (!toml::try_parse(path).is_ok())
+        {
+            spdlog::error(
+                "f4ffmpeg could not parse '{}'; its settings were ignored. "
+                "Check TOML syntax, especially comma-separated array values.",
+                path
+            );
+        }
+    }
+
     void initialize()
     {
         constexpr auto basePath =
@@ -36,6 +52,9 @@ namespace f4ffmpeg::config
 
         auto* settings =
             REX::FTomlSettingStore::GetSingleton();
+
+        validateTomlFile(basePath);
+        validateTomlFile(userPath);
 
         settings->Init(
             basePath,

@@ -125,4 +125,9 @@ namespace f4ffmpeg
     // actually requested. The historical name is retained for source
     // compatibility with the existing main.cpp post-load call site.
     bool dispatchVideoManagers();
+
+    // Scans the player's current already-loaded cell for configured Nuka-Cola
+    // screen targets. Called after a successful load because those references
+    // may have completed 3D creation before the lazy cell event is observed.
+    void injectNukaColaMachineScreensForLoadedCell();
 }

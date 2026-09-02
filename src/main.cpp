@@ -175,6 +175,8 @@ namespace Main
 					);
 				}
 
+                f4ffmpeg::injectNukaColaMachineScreensForLoadedCell();
+
 				break;
 			}
 

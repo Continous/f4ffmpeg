@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -32,6 +33,7 @@
 #include <RE/B/BSShaderTextureSet.h>
 #include <RE/B/BSTextureSet.h>
 #include <RE/T/TESCellFullyLoadedEvent.h>
+#include <RE/T/TESObjectCELL.h>
 #include <RE/T/TESBoundObject.h>
 #include <RE/T/TESObjectREFR.h>
 #include <RE/N/NiAVObject.h>
@@ -399,6 +401,48 @@ namespace f4ffmpeg
             }
 
             return std::nullopt;
+        }
+
+        std::optional<RE::TESFormID> parseConfiguredFormId(
+            std::string_view value)
+        {
+            if (startsWithInsensitive(value, "0x"))
+                value.remove_prefix(2);
+
+            // Editor IDs can be freely named. Treat only an exact eight-digit
+            // hexadecimal value as a FormID selector.
+            if (value.size() != 8)
+                return std::nullopt;
+
+            RE::TESFormID formId = 0;
+            const auto [end, error] = std::from_chars(
+                value.data(),
+                value.data() + value.size(),
+                formId,
+                16
+            );
+
+            if (error != std::errc{} || end != value.data() + value.size())
+                return std::nullopt;
+
+            return formId;
+        }
+
+        bool resemblesFormIdSelector(std::string_view value)
+        {
+            if (startsWithInsensitive(value, "0x"))
+                return true;
+
+            return !value.empty() && std::all_of(
+                value.begin(),
+                value.end(),
+                [](char character)
+                {
+                    return (character >= '0' && character <= '9') ||
+                        (character >= 'A' && character <= 'F') ||
+                        (character >= 'a' && character <= 'f');
+                }
+            );
         }
 
         struct parsedLocationSection
@@ -1262,6 +1306,7 @@ namespace f4ffmpeg
         std::mutex playbackRegistryMutex;
 
         std::unordered_set<std::string> nukaColaMachineScreenTargets;
+        std::unordered_set<RE::TESFormID> nukaColaMachineScreenTargetFormIds;
         std::unordered_set<std::string> nukaWorldLocationEditorIds;
         std::unordered_set<RE::TESFormID> injectedNukaColaMachineReferences;
         std::mutex injectedNukaColaMachineReferencesMutex;
@@ -1482,13 +1527,35 @@ namespace f4ffmpeg
         bool isNukaColaMachineScreenTarget(
             const RE::TESObjectREFR& reference)
         {
+            if (nukaColaMachineScreenTargetFormIds.contains(
+                    reference.GetFormID()))
+            {
+                return true;
+            }
+
             const auto* baseObject = reference.GetObjectReference();
+            if (baseObject != nullptr &&
+                nukaColaMachineScreenTargetFormIds.contains(
+                    baseObject->GetFormID()))
+            {
+                return true;
+            }
+
             const char* editorId = baseObject != nullptr
                 ? baseObject->GetFormEditorID()
                 : nullptr;
 
-            return editorId != nullptr &&
-                nukaColaMachineScreenTargets.contains(lowercasePath(editorId));
+            if (editorId != nullptr &&
+                nukaColaMachineScreenTargets.contains(lowercasePath(editorId)))
+            {
+                return true;
+            }
+
+            const char* referenceEditorId = reference.GetFormEditorID();
+            return referenceEditorId != nullptr &&
+                nukaColaMachineScreenTargets.contains(
+                    lowercasePath(referenceEditorId)
+                );
         }
 
         bool injectNukaColaMachineScreen(
@@ -1591,6 +1658,79 @@ namespace f4ffmpeg
             return true;
         }
 
+        void injectNukaColaMachineScreensInCell(
+            RE::TESObjectCELL& cell,
+            const char* source)
+        {
+            if (!nukaColaMachineScreenInjectionEnabled)
+                return;
+
+            std::size_t referenceCount = 0;
+            std::size_t targetCount = 0;
+            std::size_t attachedCount = 0;
+
+            cell.ForEachReference(
+                [&](RE::TESObjectREFR* reference)
+                {
+                    ++referenceCount;
+
+                    if (reference == nullptr ||
+                        !isNukaColaMachineScreenTarget(*reference))
+                    {
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    }
+
+                    ++targetCount;
+                    const auto referenceFormId = reference->GetFormID();
+                    const auto* baseObject = reference->GetObjectReference();
+
+                    REX::INFO(
+                        "f4ffmpeg Nuka-Cola target matched by {}: reference {:08X}, base form {:08X}, 3D={}.",
+                        source,
+                        referenceFormId,
+                        baseObject != nullptr
+                            ? baseObject->GetFormID()
+                            : 0,
+                        reference->Get3D() != nullptr
+                            ? "ready"
+                            : "unavailable"
+                    );
+
+                    {
+                        std::scoped_lock lock(
+                            injectedNukaColaMachineReferencesMutex
+                        );
+                        if (injectedNukaColaMachineReferences.contains(
+                                referenceFormId))
+                        {
+                            return RE::BSContainer::ForEachResult::kContinue;
+                        }
+                    }
+
+                    if (injectNukaColaMachineScreen(*reference))
+                    {
+                        std::scoped_lock lock(
+                            injectedNukaColaMachineReferencesMutex
+                        );
+                        injectedNukaColaMachineReferences.emplace(
+                            referenceFormId
+                        );
+                        ++attachedCount;
+                    }
+
+                    return RE::BSContainer::ForEachResult::kContinue;
+                }
+            );
+
+            REX::INFO(
+                "f4ffmpeg scanned Nuka-Cola screen targets from {}: {} reference(s), {} target match(es), {} attachment(s).",
+                source,
+                referenceCount,
+                targetCount,
+                attachedCount
+            );
+        }
+
         class nukaColaMachineCellSink final :
             public RE::BSTEventSink<RE::TESCellFullyLoadedEvent>
         {
@@ -1611,32 +1751,9 @@ namespace f4ffmpeg
                     );
                 }
 
-                event.cell->ForEachReference(
-                    [](RE::TESObjectREFR* reference)
-                    {
-                        if (reference == nullptr)
-                            return RE::BSContainer::ForEachResult::kContinue;
-
-                        if (!isNukaColaMachineScreenTarget(*reference))
-                        {
-                            return RE::BSContainer::ForEachResult::kContinue;
-                        }
-
-                        const auto formId = reference->GetFormID();
-                        {
-                            std::scoped_lock lock(injectedNukaColaMachineReferencesMutex);
-                            if (injectedNukaColaMachineReferences.contains(formId))
-                                return RE::BSContainer::ForEachResult::kContinue;
-                        }
-
-                        if (injectNukaColaMachineScreen(*reference))
-                        {
-                            std::scoped_lock lock(injectedNukaColaMachineReferencesMutex);
-                            injectedNukaColaMachineReferences.emplace(formId);
-                        }
-
-                        return RE::BSContainer::ForEachResult::kContinue;
-                    }
+                injectNukaColaMachineScreensInCell(
+                    *event.cell,
+                    "TESCellFullyLoadedEvent"
                 );
 
                 return RE::BSEventNotifyControl::kContinue;
@@ -4851,6 +4968,30 @@ namespace f4ffmpeg
         return true;
     }
 
+    void injectNukaColaMachineScreensForLoadedCell()
+    {
+        if (!nukaColaMachineScreenInjectionEnabled)
+            return;
+
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* cell = player != nullptr
+            ? player->GetParentCell()
+            : nullptr;
+
+        if (cell == nullptr)
+        {
+            REX::WARN(
+                "f4ffmpeg could not scan Nuka-Cola screen targets after game load: the player cell is unavailable."
+            );
+            return;
+        }
+
+        injectNukaColaMachineScreensInCell(
+            *cell,
+            "PostLoadGame player cell"
+        );
+    }
+
     bool initializeNifHandler()
     {
         static std::once_flag initializeOnce;
@@ -4909,7 +5050,19 @@ namespace f4ffmpeg
                 for (const auto& editorId :
                      config::nukaColaMachineScreenTargets.GetValue())
                 {
-                    if (!editorId.empty())
+                    if (const auto formId = parseConfiguredFormId(editorId))
+                    {
+                        nukaColaMachineScreenTargetFormIds.emplace(*formId);
+                    }
+                    else if (resemblesFormIdSelector(editorId))
+                    {
+                        REX::WARN(
+                            "f4ffmpeg ignored malformed Extra.NukaColaMachineScreenTargets selector '{}'; FormIDs must be exactly eight hexadecimal digits (for example 00034661 or 0x00034661).",
+                            editorId
+                        );
+                    }
+                    else if (!editorId.empty())
+                    {
                         nukaColaMachineScreenTargets.emplace(
                             lowercasePath(editorId)
                         );
@@ -4936,7 +5089,8 @@ namespace f4ffmpeg
                 }
 
                 if (nukaColaMachineScreenInjectionEnabled &&
-                    nukaColaMachineScreenTargets.empty())
+                    nukaColaMachineScreenTargets.empty() &&
+                    nukaColaMachineScreenTargetFormIds.empty())
                 {
                     REX::WARN(
                         "f4ffmpeg Nuka-Cola screen injection is enabled but Extra.NukaColaMachineScreenTargets is empty."
@@ -4960,8 +5114,11 @@ namespace f4ffmpeg
                             std::addressof(nukaColaMachineCellEventSink)
                         );
                         REX::INFO(
-                            "f4ffmpeg Nuka-Cola screen injection enabled for {} base form(s), Nuka-World source form='{}', sanitization={}.",
+                            "f4ffmpeg Nuka-Cola screen injection enabled for {} base form selector(s) ({} EditorID, {} FormID), Nuka-World source form='{}', sanitization={}.",
+                            nukaColaMachineScreenTargets.size() +
+                                nukaColaMachineScreenTargetFormIds.size(),
                             nukaColaMachineScreenTargets.size(),
+                            nukaColaMachineScreenTargetFormIds.size(),
                             nukaColaMachineScreenSourceForm,
                             nukaColaMachineScreenSanitization
                         );

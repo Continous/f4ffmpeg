@@ -11,6 +11,8 @@ UsePlaylistTransitionMethod = true
 # Attach Nuka-World's Nuka-Cola commercial-screen NIF to compatible machine
 # base forms after their cells load. Nuka-World must be installed.
 EnableNukaColaMachineScreens = false
+# Entries may be base-form EditorIDs or eight-digit hexadecimal FormIDs. TOML
+# arrays require commas: ["00034661", "000302DC"].
 NukaColaMachineScreenTargets = []
 NukaColaMachineScreenSourceForm = "NukaColaMachineCommercialFx"
 
