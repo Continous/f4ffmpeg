@@ -1639,14 +1639,30 @@ namespace f4ffmpeg
             auto* parent = root->parent;
             if (parent == nullptr)
             {
-                REX::WARN(
-                    "f4ffmpeg cannot attach a Nuka-Cola screen to reference {:08X}: its 3D root has no scene parent.",
+                parent = root->IsNode();
+                if (parent == nullptr)
+                {
+                    REX::WARN(
+                        "f4ffmpeg cannot attach a Nuka-Cola screen to reference {:08X}: its 3D root has neither a scene parent nor a NiNode root.",
+                        reference.GetFormID()
+                    );
+                    return false;
+                }
+
+                // The reference root itself supplies the world placement. An
+                // identity child transform reproduces a separate PlaceAtMe
+                // screen at the same reference, without applying the reference
+                // transform twice.
+                screenRoot->SetLocalTransform(RE::NiTransform::IDENTITY);
+                REX::INFO(
+                    "f4ffmpeg Nuka-Cola target reference {:08X} has no scene parent; attaching an identity-transform screen child.",
                     reference.GetFormID()
                 );
-                return false;
             }
-
-            screenRoot->SetLocalTransform(root->GetLocalTransform());
+            else
+            {
+                screenRoot->SetLocalTransform(root->GetLocalTransform());
+            }
 
             REX::INFO(
                 "f4ffmpeg attaching Nuka-Cola commercial screen beside reference {:08X}.",
