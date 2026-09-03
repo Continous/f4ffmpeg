@@ -29,6 +29,7 @@
 
 #include <RE/B/BSGraphics.h>
 #include <RE/B/BSGeometry.h>
+#include <RE/B/BSShaderMaterial.h>
 #include <RE/B/BSShaderProperty.h>
 #include <RE/B/BSShaderTextureSet.h>
 #include <RE/B/BSTextureSet.h>
@@ -39,7 +40,9 @@
 #include <RE/T/TESObjectREFR.h>
 #include <RE/N/NEW_REFR_DATA.h>
 #include <RE/N/NiAVObject.h>
+#include <RE/N/NiNode.h>
 #include <RE/N/NiPointer.h>
+#include <RE/N/NiProperty.h>
 #include <RE/N/NiTexture.h>
 #include <RE/P/PlayerCharacter.h>
 #include <RE/B/BGSLocation.h>
@@ -66,6 +69,9 @@ namespace f4ffmpeg
 
         constexpr std::string_view workshopTvRasterScanTexture =
             "textures\\effects\\tvanim\\rasterscananim_d.dds";
+
+        constexpr std::string_view nukaColaCommercialScreenTexture =
+            "textures\\actors\\dlc04\\nukatron\\nukaandcappycommercial01_d.dds";
 
 
         // Keep .mov first for backward-compatible collision precedence.
@@ -1219,6 +1225,7 @@ namespace f4ffmpeg
 
             videoPlaybackSettings playbackSettings;
             bool standalonePlaylist = false;
+            bool hasGlobalPlayback = true;
         };
 
         struct resolvedVideoTarget
@@ -1803,6 +1810,199 @@ namespace f4ffmpeg
 
         REL::Relocation<referenceLoad3D_t> originalReferenceLoad3D;
 
+        struct nukaColaSanitizationStats
+        {
+            std::size_t objectsVisited = 0;
+            std::size_t objectControllerChainsCleared = 0;
+            std::size_t propertyControllerChainsCleared = 0;
+            std::size_t videoUvMaterialsReset = 0;
+            std::size_t videoUvMaterialResetFailures = 0;
+        };
+
+        bool isIndexedVideoTextureName(
+            const char* textureName)
+        {
+            if (textureName == nullptr || *textureName == '\0')
+                return false;
+
+            const std::string key = lowercasePath(
+                canonicalTextureLookupPath(textureName)
+            );
+
+            return !key.empty() && replacementIndex.contains(key);
+        }
+
+        bool isNukaColaCommercialScreenTexture(
+            const char* textureName)
+        {
+            if (textureName == nullptr || *textureName == '\0')
+                return false;
+
+            return lowercasePath(
+                       canonicalTextureLookupPath(textureName)
+                   ) == nukaColaCommercialScreenTexture;
+        }
+
+        enum class shaderUvCleanResult : std::uint8_t
+        {
+            unchanged,
+            reset,
+            failed
+        };
+
+        shaderUvCleanResult resetShaderUvTransform(
+            RE::BSShaderProperty* shaderProperty)
+        {
+            if (shaderProperty == nullptr || shaderProperty->material == nullptr)
+                return shaderUvCleanResult::failed;
+
+            auto* sourceMaterial = shaderProperty->material;
+
+            bool needsReset = false;
+            for (std::size_t uvSet = 0; uvSet < 2; ++uvSet)
+            {
+                needsReset = needsReset ||
+                    sourceMaterial->texCoordOffset[uvSet] != RE::NiPoint2::ZERO ||
+                    sourceMaterial->texCoordScale[uvSet] != RE::NiPoint2::UNIT;
+            }
+
+            if (!needsReset)
+                return shaderUvCleanResult::unchanged;
+
+            auto* cleanMaterial = sourceMaterial->Create();
+            if (cleanMaterial == nullptr)
+                return shaderUvCleanResult::failed;
+
+            cleanMaterial->CopyMembers(sourceMaterial);
+
+            for (std::size_t uvSet = 0; uvSet < 2; ++uvSet)
+            {
+                cleanMaterial->texCoordOffset[uvSet] = RE::NiPoint2::ZERO;
+                cleanMaterial->texCoordScale[uvSet] = RE::NiPoint2::UNIT;
+            }
+
+            // Do not mutate sourceMaterial in place: shader materials may be
+            // shared across scene instances. SetMaterial(false) lets Fallout
+            // hash/deduplicate the clean copy and own the material it assigns.
+            shaderProperty->SetMaterial(cleanMaterial, false);
+            delete cleanMaterial;
+
+            // Any passes constructed against the atlas transform are stale now.
+            shaderProperty->DoClearRenderPasses();
+            return shaderUvCleanResult::reset;
+        }
+
+        bool clearNukaColaVideoFlipbookControllers(
+            RE::BSShaderProperty* shaderProperty,
+            RE::BSGeometry* geometry)
+        {
+            bool changed = false;
+
+            if (shaderProperty != nullptr && shaderProperty->controllers)
+            {
+                shaderProperty->controllers.reset();
+                changed = true;
+            }
+
+            // Existing Bethesda-placed commercial FX references are not in the
+            // plugin's spawned-reference registry. Walk from the screen geometry
+            // to its NIF root and remove the controller manager/sequence chain too
+            // whenever this exact Nuka screen is being replaced by video.
+            for (RE::NiAVObject* current = geometry;
+                 current != nullptr;
+                 current = current->parent)
+            {
+                if (current->controllers)
+                {
+                    current->controllers.reset();
+                    changed = true;
+                }
+            }
+
+            return changed;
+        }
+
+        void sanitizeNukaColaMachineScreenObject(
+            RE::NiAVObject* object,
+            nukaColaSanitizationStats& stats)
+        {
+            if (object == nullptr)
+                return;
+
+            ++stats.objectsVisited;
+
+            // NiAVObject inherits NiObjectNET. Controllers can be attached to any
+            // scene object, not just the NIF root, so clear the complete object
+            // controller chain recursively.
+            if (object->controllers)
+            {
+                object->controllers.reset();
+                ++stats.objectControllerChainsCleared;
+            }
+
+            // The Nuka-World commercial flipbook has animation state on its shader
+            // property. Clear property-local controllers as well, then normalize
+            // the material UV transform for the property whose base texture is an
+            // f4ffmpeg video target. Removing a float controller alone can freeze
+            // the last atlas crop; identity offset/scale makes the replacement
+            // video occupy the whole authored screen UV range.
+            if (auto* geometry = netimmerse_cast<RE::BSGeometry*>(object))
+            {
+                for (auto& property : geometry->properties)
+                {
+                    if (!property)
+                        continue;
+
+                    if (property->controllers)
+                    {
+                        property->controllers.reset();
+                        ++stats.propertyControllerChainsCleared;
+                    }
+
+                    auto* shaderProperty =
+                        netimmerse_cast<RE::BSShaderProperty*>(property.get());
+
+                    if (shaderProperty == nullptr)
+                        continue;
+
+                    const auto* baseTexture = shaderProperty->GetBaseTexture();
+                    const char* textureName = baseTexture != nullptr
+                        ? baseTexture->name.c_str()
+                        : nullptr;
+
+                    if (!isNukaColaCommercialScreenTexture(textureName) ||
+                        !isIndexedVideoTextureName(textureName))
+                    {
+                        continue;
+                    }
+
+                    switch (resetShaderUvTransform(shaderProperty))
+                    {
+                        case shaderUvCleanResult::reset:
+                            ++stats.videoUvMaterialsReset;
+                            break;
+                        case shaderUvCleanResult::failed:
+                            ++stats.videoUvMaterialResetFailures;
+                            break;
+                        case shaderUvCleanResult::unchanged:
+                        default:
+                            break;
+                    }
+                }
+            }
+
+            if (auto* node = netimmerse_cast<RE::NiNode*>(object))
+            {
+                for (auto& child : node->children)
+                {
+                    sanitizeNukaColaMachineScreenObject(
+                        child.get(),
+                        stats
+                    );
+                }
+            }
+        }
+
         RE::NiAVObject* referenceLoad3DHook(
             RE::TESObjectREFR* reference,
             bool backgroundLoading)
@@ -1824,12 +2024,22 @@ namespace f4ffmpeg
             if (!shouldSanitize)
                 return root;
 
-            // HandlePre3D marked only references created by this plugin. The
-            // controller chain owns the commercial animation and autoplay sound.
-            root->controllers.reset();
+            // HandlePre3D marks only references created by this plugin. Sanitize
+            // the complete spawned scene graph before it can retain flipbook UV
+            // controllers or an atlas-sized material transform.
+            nukaColaSanitizationStats stats{};
+            sanitizeNukaColaMachineScreenObject(root, stats);
+
             REX::INFO(
-                "f4ffmpeg sanitized Nuka-Cola commercial screen reference {:08X} after Load3D.",
-                reference->GetFormID()
+                "f4ffmpeg sanitized Nuka-Cola commercial screen reference {:08X} after Load3D: "
+                "{} scene object(s), {} object controller chain(s), {} property controller chain(s), "
+                "{} video UV material(s) reset, {} UV reset failure(s).",
+                reference->GetFormID(),
+                stats.objectsVisited,
+                stats.objectControllerChainsCleared,
+                stats.propertyControllerChainsCleared,
+                stats.videoUvMaterialsReset,
+                stats.videoUvMaterialResetFailures
             );
             return root;
         }
@@ -2057,7 +2267,8 @@ namespace f4ffmpeg
                     const std::string& initialVideoPath,
                     const std::string& playbackKey,
                     const videoPlaybackSettings& playbackSettings,
-                    bool standalonePlaylist)
+                    bool standalonePlaylist,
+                    bool hasGlobalPlayback)
                 {
                     std::string textureStem{
                         texturesPrefix
@@ -2085,7 +2296,8 @@ namespace f4ffmpeg
                             initialVideoPath,
                             playbackKey,
                             playbackSettings,
-                            standalonePlaylist
+                            standalonePlaylist,
+                            hasGlobalPlayback
                         }
                     );
 
@@ -2096,7 +2308,8 @@ namespace f4ffmpeg
                             initialVideoPath,
                             playbackKey,
                             playbackSettings,
-                            standalonePlaylist
+                            standalonePlaylist,
+                            hasGlobalPlayback
                         }
                     );
                 };
@@ -2121,22 +2334,39 @@ namespace f4ffmpeg
                     loadPlaybackSettingsForVideo(
                         videoPath
                     );
+                const bool hasLocationPlayback = std::any_of(
+                    playbackSettings.locationOverrides.begin(),
+                    playbackSettings.locationOverrides.end(),
+                    [](const auto& locationSettings)
+                    {
+                        return !locationSettings.playlist.empty();
+                    }
+                );
+                // A video without a sidecar remains the historical implicit
+                // global replacement. A sidecar that supplies only location
+                // media explicitly makes its same-stem video location-only.
+                const bool hasGlobalPlayback =
+                    !hasLocationPlayback ||
+                    !playbackSettings.playlist.empty();
 
                 registerReplacementPair(
                     *relativeStem,
-                    physicalVideoPath,
+                    hasGlobalPlayback
+                        ? physicalVideoPath
+                        : std::string{},
                     physicalVideoPath,
                     playbackSettings,
-                    false
+                    false,
+                    hasGlobalPlayback
                 );
 
                 ++activeVideos;
             }
 
             // A same-stem INI beside a supported video is already consumed as
-            // that video's sidecar above. Any other INI with playlist entries is
-            // itself a replacement definition: its filename supplies the texture
-            // key and its first playlist item supplies the initial decoder source.
+            // that video's sidecar above. Any other INI with global or location
+            // playlist entries is itself a replacement definition. A location-only
+            // definition intentionally has no initial decoder source.
             for (const auto& iniPath : iniFiles)
             {
                 if (hasSupportedVideoSibling(iniPath))
@@ -2147,7 +2377,18 @@ namespace f4ffmpeg
                         iniPath
                     );
 
-                if (playbackSettings.playlist.empty())
+                const bool hasGlobalPlayback =
+                    !playbackSettings.playlist.empty();
+                const bool hasLocationPlayback = std::any_of(
+                    playbackSettings.locationOverrides.begin(),
+                    playbackSettings.locationOverrides.end(),
+                    [](const auto& locationSettings)
+                    {
+                        return !locationSettings.playlist.empty();
+                    }
+                );
+
+                if (!hasGlobalPlayback && !hasLocationPlayback)
                     continue;
 
                 const auto relativeStem =
@@ -2156,10 +2397,11 @@ namespace f4ffmpeg
                 if (!relativeStem)
                     continue;
 
-                const std::string initialVideoPath =
-                    playbackSettings.playlist.front();
+                const std::string initialVideoPath = hasGlobalPlayback
+                    ? playbackSettings.playlist.front()
+                    : std::string{};
 
-                if (!isSupportedVideoPath(
+                if (hasGlobalPlayback && !isSupportedVideoPath(
                         std::filesystem::path{
                             initialVideoPath
                         }))
@@ -2178,16 +2420,18 @@ namespace f4ffmpeg
                     initialVideoPath,
                     iniPath.string(),
                     playbackSettings,
-                    true
+                    true,
+                    hasGlobalPlayback
                 );
 
                 ++activePlaylists;
 
                 REX::INFO(
-                    "f4ffmpeg indexed standalone playlist '{}' for texture stem '{}' with {} source(s).",
+                    "f4ffmpeg indexed standalone playlist '{}' for texture stem '{}' with global playback={}, location playback={}.",
                     iniPath.string(),
                     *relativeStem,
-                    playbackSettings.playlist.size()
+                    hasGlobalPlayback,
+                    hasLocationPlayback
                 );
             }
 
@@ -2202,6 +2446,9 @@ namespace f4ffmpeg
                      replacementIndex)
                 {
                     (void)textureKey;
+
+                    if (!replacement.hasGlobalPlayback)
+                        continue;
 
                     const std::string identityKey =
                         lowercasePath(
@@ -2274,8 +2521,16 @@ namespace f4ffmpeg
                 replacement->second.playbackSettings
             );
 
+            if (!replacement->second.hasGlobalPlayback &&
+                (locationSettings.locationKey.empty() ||
+                 locationSettings.settings.playlist.empty()))
+            {
+                return std::nullopt;
+            }
+
             std::string videoPath = replacement->second.videoPath;
-            if (replacement->second.standalonePlaylist &&
+            if ((replacement->second.standalonePlaylist ||
+                 !replacement->second.hasGlobalPlayback) &&
                 !locationSettings.settings.playlist.empty())
             {
                 videoPath = locationSettings.settings.playlist.front();
@@ -2722,6 +2977,13 @@ namespace f4ffmpeg
             std::shared_ptr<const videoTarget>>
             targetsByVanillaSrv;
 
+        // Preserve the source texture identity even when its current player
+        // location has no active video target.
+        std::unordered_map<
+            REX::W32::ID3D11ShaderResourceView*,
+            std::string>
+            texturePathsByVanillaSrv;
+
         std::unordered_set<
             REX::W32::ID3D11ShaderResourceView*>
             suppressedVanillaSrvs;
@@ -2854,7 +3116,17 @@ namespace f4ffmpeg
                     texturePath
                 );
 
-            if (!target)
+            const std::string indexedTexturePath =
+                canonicalTextureLookupPath(
+                    texturePath
+                        ? texturePath
+                        : ""
+                );
+            const bool indexed = replacementIndex.contains(
+                lowercasePath(indexedTexturePath)
+            );
+
+            if (!target && !indexed)
                 return true;
 
             auto* vanillaSrv =
@@ -2873,12 +3145,17 @@ namespace f4ffmpeg
                     bindingMutex
                 );
 
+                changed = texturePathsByVanillaSrv.emplace(
+                    vanillaSrv,
+                    indexedTexturePath
+                ).second;
+
                 const auto existing =
                     targetsByVanillaSrv.find(
                         vanillaSrv
                     );
 
-                if (existing == targetsByVanillaSrv.end())
+                if (target && existing == targetsByVanillaSrv.end())
                 {
                     targetsByVanillaSrv.emplace(
                         vanillaSrv,
@@ -2888,6 +3165,7 @@ namespace f4ffmpeg
                     changed = true;
                 }
                 else if (
+                    target &&
                     existing->second->getVideoPath() !=
                         target->getVideoPath() &&
                     modePriority(target->getMode()) >
@@ -2907,6 +3185,18 @@ namespace f4ffmpeg
 
             if (!changed)
                 return true;
+
+            if (!target)
+            {
+                REX::INFO(
+                    "Bound location-only f4ffmpeg presentation '{}' via {}.",
+                    indexedTexturePath,
+                    sourceName
+                        ? sourceName
+                        : "unknown"
+                );
+                return true;
+            }
 
             std::string logKey =
                 lowercasePath(
@@ -4050,6 +4340,48 @@ namespace f4ffmpeg
 
                 if (target)
                 {
+                    // The DLC04 Nuka commercial is authored as a UV flipbook. A
+                    // video SRV must see the full 0..1 UV range instead of one
+                    // atlas cell. Apply this whenever the exact Nuka screen texture
+                    // is actually resolved to an f4ffmpeg target, including
+                    // Bethesda-placed Nuka-World FX references that were never
+                    // created through our spawn path.
+                    if (isNukaColaCommercialScreenTexture(textureName))
+                    {
+                        const bool controllerChainCleared =
+                            clearNukaColaVideoFlipbookControllers(
+                                shaderProperty,
+                                geometry
+                            );
+
+                        const auto uvResult =
+                            resetShaderUvTransform(shaderProperty);
+
+                        if (controllerChainCleared ||
+                            uvResult == shaderUvCleanResult::reset)
+                        {
+                            REX::INFO(
+                                "f4ffmpeg de-flipbooked Nuka-Cola commercial video geometry '{}': controllers={}, UV={}",
+                                geometry != nullptr && geometry->name.c_str() != nullptr
+                                    ? geometry->name.c_str()
+                                    : "<unnamed>",
+                                controllerChainCleared
+                                    ? "cleared"
+                                    : "already clear",
+                                uvResult == shaderUvCleanResult::reset
+                                    ? "identity reset"
+                                    : "already identity"
+                            );
+                        }
+                        else if (uvResult == shaderUvCleanResult::failed)
+                        {
+                            REX::TRACE(
+                                "f4ffmpeg could not identity-reset Nuka-Cola commercial UV material for property={}.",
+                                static_cast<const void*>(shaderProperty)
+                            );
+                        }
+                    }
+
                     // This rendered screen is now proven to be one f4ffmpeg
                     // handles. Record both ownership forms: fadeNode for the fast
                     // path and a shallow parent chain for TV assets whose sibling
@@ -4403,6 +4735,7 @@ namespace f4ffmpeg
 
                 std::shared_ptr<const videoTarget>
                     target;
+                std::string texturePath;
 
                 bool suppress = false;
 
@@ -4418,6 +4751,16 @@ namespace f4ffmpeg
 
                     if (!suppress)
                     {
+                        if (const auto texturePathBinding =
+                                texturePathsByVanillaSrv.find(
+                                    vanillaSrv
+                                );
+                            texturePathBinding != texturePathsByVanillaSrv.end())
+                        {
+                            texturePath =
+                                texturePathBinding->second;
+                        }
+
                         const auto binding =
                             targetsByVanillaSrv.find(
                                 vanillaSrv
@@ -4454,17 +4797,29 @@ namespace f4ffmpeg
                     continue;
                 }
 
-                if (!target)
-                    continue;
+                if (texturePath.empty())
+                {
+                    if (!target)
+                        continue;
+
+                    texturePath = target->getTexturePath();
+                }
 
                 // A vanilla SRV is shared by every instance of a texture. Resolve
                 // again at draw time so a player location change selects that
                 // location's manager instead of the target first seen on load.
-                if (const auto locationTarget = getVideoTargetForTexture(
-                        target->getTexturePath().c_str()))
+                const auto locationTarget = getVideoTargetForTexture(
+                    texturePath.c_str()
+                );
+                if (!locationTarget)
                 {
-                    target = locationTarget;
+                    // This may be a location-only definition. When the player
+                    // leaves every configured location, preserve Fallout's
+                    // supplied texture instead of the last location's video.
+                    continue;
                 }
+
+                target = locationTarget;
 
                 const auto transition =
                     target->getTransitionPresentation();

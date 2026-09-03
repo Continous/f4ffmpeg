@@ -30,7 +30,7 @@ Replacement targets will mirror their actual texture names but instead of Data/T
 
 ### Location playlists
 
-Playlist INIs may include `[Location.<BGSLocation editor ID>]` blocks, with optional `.Playback`, `.Playlist`, and `.Transition` suffixes. The current player location is tested first, then its parent locations, so the narrowest configured location wins. `Mode=Add` appends that block's playlist entries to the global list; `Mode=Override` replaces the global list. `Loop`, `Shuffle`, and transition values supplied by the location block override only those global values. Each resolved location gets an independent lazy playback manager, so changing location changes playback without restarting unrelated screens.
+Playlist INIs may include `[Location.<BGSLocation editor ID>]` blocks, with optional `.Playback`, `.Playlist`, and `.Transition` suffixes. The current player location is tested first, then its parent locations, so the narrowest configured location wins. `Mode=Add` appends that block's playlist entries to the global list; `Mode=Override` replaces the global list. `Loop`, `Shuffle`, and transition values supplied by the location block override only those global values. Each resolved location gets an independent lazy playback manager, so changing location changes playback without restarting unrelated screens. An INI with no global playlist and one or more location playlists is location-only, whether it is standalone or beside a same-stem video: outside a matching location, f4ffmpeg leaves Fallout's original texture in place.
 
 ### Nuka-Cola machine screens
 
