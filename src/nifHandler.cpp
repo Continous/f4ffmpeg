@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <condition_variable>
+#include <cmath>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -38,6 +39,7 @@
 #include <RE/T/TESObjectCELL.h>
 #include <RE/T/TESBoundObject.h>
 #include <RE/T/TESObjectREFR.h>
+#include <RE/T/TESWorldSpace.h>
 #include <RE/N/NEW_REFR_DATA.h>
 #include <RE/N/NiAVObject.h>
 #include <RE/N/NiNode.h>
@@ -1251,54 +1253,81 @@ namespace f4ffmpeg
             resolvedLocationPlaybackSettings result{baseSettings, {}};
             result.settings.locationOverrides.clear();
 
-            auto* player = RE::PlayerCharacter::GetSingleton();
-            auto* location = player != nullptr
-                ? player->currentLocation
-                : nullptr;
-
-            for (; location != nullptr; location = location->parentLoc)
-            {
-                const char* editorId = location->GetFormEditorID();
-                if (editorId == nullptr || *editorId == '\0')
-                    continue;
-
-                const std::string locationKey = lowercasePath(editorId);
-                const auto overrideIt = std::find_if(
-                    baseSettings.locationOverrides.begin(),
-                    baseSettings.locationOverrides.end(),
-                    [&locationKey](const auto& candidate)
-                    {
-                        return lowercasePath(candidate.locationEditorId) ==
-                            locationKey;
-                    }
-                );
-
-                if (overrideIt == baseSettings.locationOverrides.end())
-                    continue;
-
-                const auto& locationSettings = *overrideIt;
-                if (locationSettings.looping)
-                    result.settings.looping = *locationSettings.looping;
-                if (locationSettings.shuffle)
-                    result.settings.shuffle = *locationSettings.shuffle;
-                if (locationSettings.transition)
-                    result.settings.transition = locationSettings.transition;
-                if (locationSettings.transitionImage)
-                    result.settings.transitionImage = locationSettings.transitionImage;
-
-                if (locationSettings.hasPlaylist)
+            auto applyEditorId =
+                [&](const char* editorId) -> bool
                 {
-                    if (locationSettings.overridePlaylist)
-                        result.settings.playlist = locationSettings.playlist;
-                    else
-                        result.settings.playlist.insert(
-                            result.settings.playlist.end(),
-                            locationSettings.playlist.begin(),
-                            locationSettings.playlist.end()
-                        );
-                }
+                    if (editorId == nullptr || *editorId == '\0')
+                        return false;
 
-                result.locationKey = locationKey;
+                    const std::string locationKey = lowercasePath(editorId);
+                    const auto overrideIt = std::find_if(
+                        baseSettings.locationOverrides.begin(),
+                        baseSettings.locationOverrides.end(),
+                        [&locationKey](const auto& candidate)
+                        {
+                            return lowercasePath(candidate.locationEditorId) ==
+                                locationKey;
+                        }
+                    );
+
+                    if (overrideIt == baseSettings.locationOverrides.end())
+                        return false;
+
+                    const auto& locationSettings = *overrideIt;
+                    if (locationSettings.looping)
+                        result.settings.looping = *locationSettings.looping;
+                    if (locationSettings.shuffle)
+                        result.settings.shuffle = *locationSettings.shuffle;
+                    if (locationSettings.transition)
+                        result.settings.transition = locationSettings.transition;
+                    if (locationSettings.transitionImage)
+                        result.settings.transitionImage = locationSettings.transitionImage;
+
+                    if (locationSettings.hasPlaylist)
+                    {
+                        if (locationSettings.overridePlaylist)
+                            result.settings.playlist = locationSettings.playlist;
+                        else
+                            result.settings.playlist.insert(
+                                result.settings.playlist.end(),
+                                locationSettings.playlist.begin(),
+                                locationSettings.playlist.end()
+                            );
+                    }
+
+                    result.locationKey = locationKey;
+                    return true;
+                };
+
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (player == nullptr)
+                return result;
+
+            // Resolve from most-specific to broadest scope.  This keeps the
+            // existing BGSLocation hierarchy behavior while also allowing the
+            // Location.<EditorID> syntax to target cells and worldspaces.
+            if (auto* cell = player->GetParentCell();
+                cell != nullptr && applyEditorId(cell->GetFormEditorID()))
+            {
+                return result;
+            }
+
+            for (auto* location = player->currentLocation;
+                 location != nullptr;
+                 location = location->parentLoc)
+            {
+                if (applyEditorId(location->GetFormEditorID()))
+                    return result;
+            }
+
+            // PlayerCharacter exposes the currently cached exterior worldspace.
+            // In particular this lets [Location.Commonwealth.*] match the WRLD
+            // EditorID "Commonwealth", while [Location.CommonwealthLocation.*]
+            // continues to match the vanilla parent BGSLocation.
+            if (auto* worldspace = player->cachedWorldspace;
+                worldspace != nullptr &&
+                applyEditorId(worldspace->GetFormEditorID()))
+            {
                 return result;
             }
 
@@ -1590,8 +1619,7 @@ namespace f4ffmpeg
             RE::TESFormID sanitizedReferenceFormId = 0;
         };
 
-        bool injectNukaColaMachineScreen(
-            RE::TESObjectREFR& reference)
+        RE::TESBoundObject* resolveNukaColaMachineScreenSourceForm()
         {
             RE::TESBoundObject* sourceForm = nullptr;
             {
@@ -1601,9 +1629,8 @@ namespace f4ffmpeg
                 if (sourceForm == nullptr)
                 {
                     REX::INFO(
-                        "f4ffmpeg resolving Nuka-Cola screen source form '{}' for target reference {:08X}.",
-                        nukaColaMachineScreenSourceForm,
-                        reference.GetFormID()
+                        "f4ffmpeg resolving Nuka-Cola screen source form '{}'.",
+                        nukaColaMachineScreenSourceForm
                     );
 
                     const RE::BSFixedString sourceEditorId{
@@ -1628,8 +1655,54 @@ namespace f4ffmpeg
                     nukaColaMachineScreenSourceForm
                 );
                 nukaColaMachineScreenInjectionEnabled = false;
+            }
+
+            return sourceForm;
+        }
+
+        constexpr float nukaColaScreenPositionTolerance = 16.0F;
+        constexpr float nukaColaScreenAngleTolerance = 0.0872664626F;  // 5 degrees
+        constexpr float twoPi = 6.28318530718F;
+
+        float wrappedAngleDifference(float lhs, float rhs)
+        {
+            return std::fabs(std::remainder(lhs - rhs, twoPi));
+        }
+
+        bool nukaColaScreenMatchesTargetTransform(
+            const RE::TESObjectREFR& screen,
+            const RE::TESObjectREFR& target)
+        {
+            const auto screenPosition = screen.GetPosition();
+            const auto targetPosition = target.GetPosition();
+            const float dx = screenPosition.x - targetPosition.x;
+            const float dy = screenPosition.y - targetPosition.y;
+            const float dz = screenPosition.z - targetPosition.z;
+            const float distanceSquared = dx * dx + dy * dy + dz * dz;
+
+            if (distanceSquared >
+                nukaColaScreenPositionTolerance *
+                    nukaColaScreenPositionTolerance)
+            {
                 return false;
             }
+
+            const auto& screenAngle = screen.data.angle;
+            const auto& targetAngle = target.data.angle;
+            return wrappedAngleDifference(screenAngle.x, targetAngle.x) <=
+                       nukaColaScreenAngleTolerance &&
+                wrappedAngleDifference(screenAngle.y, targetAngle.y) <=
+                    nukaColaScreenAngleTolerance &&
+                wrappedAngleDifference(screenAngle.z, targetAngle.z) <=
+                    nukaColaScreenAngleTolerance;
+        }
+
+        bool injectNukaColaMachineScreen(
+            RE::TESObjectREFR& reference)
+        {
+            auto* sourceForm = resolveNukaColaMachineScreenSourceForm();
+            if (sourceForm == nullptr)
+                return false;
 
             auto* cell = reference.GetParentCell();
             auto* dataHandler = RE::TESDataHandler::GetSingleton();
@@ -1690,31 +1763,56 @@ namespace f4ffmpeg
             if (!nukaColaMachineScreenInjectionEnabled)
                 return;
 
+            auto* sourceForm = resolveNukaColaMachineScreenSourceForm();
+            if (sourceForm == nullptr)
+                return;
+
             std::size_t referenceCount = 0;
             std::size_t targetCount = 0;
+            std::size_t existingScreenCount = 0;
+            std::size_t reusedCount = 0;
             std::size_t spawnedCount = 0;
             std::vector<RE::ObjectRefHandle> targets;
+            std::vector<RE::ObjectRefHandle> existingScreens;
 
+            // Inventory the cell before creating anything. Nuka-World already
+            // places NukaColaMachineCommercialFxDLC04 references beside its own
+            // vending machines; spawning another sibling at that same transform
+            // produces the doubled-screen artifact this feature must avoid.
             cell.ForEachReference(
                 [&](RE::TESObjectREFR* reference)
                 {
                     ++referenceCount;
 
-                    if (reference == nullptr ||
-                        !isNukaColaMachineScreenTarget(*reference))
-                    {
+                    if (reference == nullptr)
                         return RE::BSContainer::ForEachResult::kContinue;
+
+                    const auto* baseObject = reference->GetObjectReference();
+                    if (baseObject == sourceForm ||
+                        (baseObject != nullptr &&
+                         baseObject->GetFormID() == sourceForm->GetFormID()))
+                    {
+                        ++existingScreenCount;
+                        existingScreens.emplace_back(reference->GetHandle());
                     }
 
-                    ++targetCount;
-                    targets.emplace_back(reference->GetHandle());
+                    if (isNukaColaMachineScreenTarget(*reference))
+                    {
+                        ++targetCount;
+                        targets.emplace_back(reference->GetHandle());
+                    }
 
                     return RE::BSContainer::ForEachResult::kContinue;
                 }
             );
 
+            std::vector<bool> existingScreenClaimed(
+                existingScreens.size(),
+                false
+            );
+
             // Creating a reference changes the cell's reference collection, so
-            // defer all spawns until its enumeration has completed.
+            // defer all reuse/spawn decisions until enumeration has completed.
             for (const auto& targetHandle : targets)
             {
                 auto reference = targetHandle.get();
@@ -1748,6 +1846,42 @@ namespace f4ffmpeg
                     );
                 }
 
+                std::optional<std::size_t> matchingScreenIndex;
+                for (std::size_t index = 0;
+                     index < existingScreens.size();
+                     ++index)
+                {
+                    if (existingScreenClaimed[index])
+                        continue;
+
+                    auto screen = existingScreens[index].get();
+                    if (screen == nullptr ||
+                        !nukaColaScreenMatchesTargetTransform(
+                            *screen,
+                            *reference))
+                    {
+                        continue;
+                    }
+
+                    matchingScreenIndex = index;
+                    break;
+                }
+
+                if (matchingScreenIndex)
+                {
+                    const auto index = *matchingScreenIndex;
+                    existingScreenClaimed[index] = true;
+                    auto screen = existingScreens[index].get();
+                    ++reusedCount;
+
+                    REX::INFO(
+                        "f4ffmpeg reused existing Nuka-Cola commercial screen reference {:08X} for target {:08X}; no duplicate was spawned.",
+                        screen != nullptr ? screen->GetFormID() : 0,
+                        referenceFormId
+                    );
+                    continue;
+                }
+
                 if (injectNukaColaMachineScreen(*reference))
                 {
                     ++spawnedCount;
@@ -1764,10 +1898,12 @@ namespace f4ffmpeg
             }
 
             REX::INFO(
-                "f4ffmpeg scanned Nuka-Cola screen targets from {}: {} reference(s), {} target match(es), {} screen reference(s) spawned.",
+                "f4ffmpeg scanned Nuka-Cola screen targets from {}: {} reference(s), {} target match(es), {} existing commercial screen(s), {} reused, {} spawned.",
                 source,
                 referenceCount,
                 targetCount,
+                existingScreenCount,
+                reusedCount,
                 spawnedCount
             );
         }
