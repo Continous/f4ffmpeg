@@ -127,7 +127,11 @@ namespace f4ffmpeg
     bool dispatchVideoManagers();
 
     // Scans the player's current already-loaded cell for configured Nuka-Cola
-    // screen targets. Called after a successful load because those references
-    // may have completed 3D creation before the lazy cell event is observed.
+    // screen targets. Called after a successful load because that cell may
+    // already have completed loading before its event is observed.
     void injectNukaColaMachineScreensForLoadedCell();
+
+    // Temporary spawned screens do not survive a save load, so their target
+    // de-duplication state must be reset before Fallout starts loading one.
+    void resetNukaColaMachineScreenInjection();
 }

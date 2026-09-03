@@ -33,11 +33,12 @@
 #include <RE/B/BSShaderTextureSet.h>
 #include <RE/B/BSTextureSet.h>
 #include <RE/T/TESCellFullyLoadedEvent.h>
+#include <RE/T/TESDataHandler.h>
 #include <RE/T/TESObjectCELL.h>
 #include <RE/T/TESBoundObject.h>
 #include <RE/T/TESObjectREFR.h>
+#include <RE/N/NEW_REFR_DATA.h>
 #include <RE/N/NiAVObject.h>
-#include <RE/N/NiNode.h>
 #include <RE/N/NiPointer.h>
 #include <RE/N/NiTexture.h>
 #include <RE/P/PlayerCharacter.h>
@@ -1307,14 +1308,12 @@ namespace f4ffmpeg
 
         std::unordered_set<std::string> nukaColaMachineScreenTargets;
         std::unordered_set<RE::TESFormID> nukaColaMachineScreenTargetFormIds;
-        std::unordered_set<std::string> nukaWorldLocationEditorIds;
         std::unordered_set<RE::TESFormID> injectedNukaColaMachineReferences;
         std::mutex injectedNukaColaMachineReferencesMutex;
         bool nukaColaMachineScreenInjectionEnabled = false;
         std::string nukaColaMachineScreenSourceForm;
         RE::TESBoundObject* nukaColaMachineScreenSource = nullptr;
         std::mutex nukaColaMachineScreenSourceMutex;
-        std::string nukaColaMachineScreenSanitization;
         std::atomic_bool nukaColaMachineCellEventObserved = false;
 
         std::unordered_map<
@@ -1498,32 +1497,6 @@ namespace f4ffmpeg
             }
         }
 
-        bool isNukaWorldLocation(const RE::BGSLocation* location)
-        {
-            for (; location != nullptr; location = location->parentLoc)
-            {
-                const char* editorId = location->GetFormEditorID();
-                if (editorId != nullptr &&
-                    nukaWorldLocationEditorIds.contains(lowercasePath(editorId)))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        bool shouldSanitizeNukaColaMachineScreen(
-            const RE::TESObjectREFR& reference)
-        {
-            if (nukaColaMachineScreenSanitization == "everywhere")
-                return true;
-            if (nukaColaMachineScreenSanitization != "outsidenukaworld")
-                return false;
-
-            return !isNukaWorldLocation(reference.GetCurrentLocation());
-        }
-
         bool isNukaColaMachineScreenTarget(
             const RE::TESObjectREFR& reference)
         {
@@ -1559,15 +1532,8 @@ namespace f4ffmpeg
         }
 
         bool injectNukaColaMachineScreen(
-            RE::TESObjectREFR& reference,
-            RE::NiAVObject* loadedRoot = nullptr)
+            RE::TESObjectREFR& reference)
         {
-            auto* root = loadedRoot != nullptr
-                ? loadedRoot
-                : reference.Get3D();
-            if (root == nullptr)
-                return false;
-
             RE::TESBoundObject* sourceForm = nullptr;
             {
                 std::scoped_lock lock(nukaColaMachineScreenSourceMutex);
@@ -1606,78 +1572,43 @@ namespace f4ffmpeg
                 return false;
             }
 
-            RE::NiPointer<RE::NiAVObject> screenRoot;
-            REX::INFO(
-                "f4ffmpeg loading Nuka-Cola screen source form '{}' graphics for reference {:08X}.",
-                nukaColaMachineScreenSourceForm,
-                reference.GetFormID()
-            );
-            screenRoot.reset(sourceForm->LoadGraphics(&reference));
-
-            if (screenRoot == nullptr)
+            auto* cell = reference.GetParentCell();
+            auto* dataHandler = RE::TESDataHandler::GetSingleton();
+            if (cell == nullptr || dataHandler == nullptr)
             {
                 REX::WARN(
-                    "f4ffmpeg could not load Nuka-World screen source form '{}' graphics; disabling screen injection for this session.",
-                    nukaColaMachineScreenSourceForm
+                    "f4ffmpeg cannot spawn a Nuka-Cola commercial screen for reference {:08X}: {} is unavailable.",
+                    reference.GetFormID(),
+                    cell == nullptr ? "its parent cell" : "the data handler"
                 );
-                nukaColaMachineScreenInjectionEnabled = false;
                 return false;
             }
 
-            if (shouldSanitizeNukaColaMachineScreen(reference))
-            {
-                // The supplied NIF's controller manager drives its commercial,
-                // including the autoplay sound event. Removing the root chain
-                // leaves the screen geometry intact without those side effects.
-                screenRoot->controllers.reset();
-            }
+            // This is the native equivalent of PlaceAtMe: the screen is a real
+            // sibling reference, so Fallout owns its 3D and streaming lifecycle.
+            RE::NEW_REFR_DATA spawn{};
+            spawn.object = sourceForm;
+            spawn.location = reference.GetPosition();
+            spawn.direction = reference.data.angle;
+            spawn.interior = cell->IsInterior() ? cell : nullptr;
+            spawn.world = cell->IsExterior() ? cell->worldSpace : nullptr;
+            spawn.forcePersist = false;
 
-            // PlaceAtMe creates the commercial-screen form as a sibling of the
-            // machine's 3D root. Mirror that relationship rather than parenting
-            // it below the machine, which composes the machine transform and
-            // makes the standalone screen appear as a second model.
-            auto* parent = root->parent;
-            if (parent == nullptr)
+            const auto spawned = dataHandler->CreateReferenceAtLocation(spawn);
+            if (!spawned)
             {
-                parent = root->IsNode();
-                if (parent == nullptr)
-                {
-                    REX::WARN(
-                        "f4ffmpeg cannot attach a Nuka-Cola screen to reference {:08X}: its 3D root has neither a scene parent nor a NiNode root.",
-                        reference.GetFormID()
-                    );
-                    return false;
-                }
-
-                // The reference root itself supplies the world placement. An
-                // identity child transform reproduces a separate PlaceAtMe
-                // screen at the same reference, without applying the reference
-                // transform twice.
-                screenRoot->SetLocalTransform(RE::NiTransform::IDENTITY);
-                REX::INFO(
-                    "f4ffmpeg Nuka-Cola target reference {:08X} has no scene parent; attaching an identity-transform screen child.",
+                REX::WARN(
+                    "f4ffmpeg could not spawn Nuka-Cola commercial screen '{}' for reference {:08X}.",
+                    nukaColaMachineScreenSourceForm,
                     reference.GetFormID()
                 );
-            }
-            else
-            {
-                screenRoot->SetLocalTransform(root->GetLocalTransform());
+                return false;
             }
 
             REX::INFO(
-                "f4ffmpeg attaching Nuka-Cola commercial screen beside reference {:08X}.",
+                "f4ffmpeg spawned Nuka-Cola commercial screen '{}' for reference {:08X}.",
+                nukaColaMachineScreenSourceForm,
                 reference.GetFormID()
-            );
-            parent->AttachChild(screenRoot.get(), false);
-
-            // AttachChild updates hierarchy ownership, but a standalone clone
-            // has not passed through a reference's normal post-attach lifecycle.
-            // This initializes the clone for culling and renderer registration.
-            screenRoot->PostAttachUpdate();
-            REX::INFO(
-                "f4ffmpeg attached and post-initialized Nuka-Cola commercial screen to reference {:08X} (sanitized={}).",
-                reference.GetFormID(),
-                shouldSanitizeNukaColaMachineScreen(reference)
             );
             return true;
         }
@@ -1691,7 +1622,8 @@ namespace f4ffmpeg
 
             std::size_t referenceCount = 0;
             std::size_t targetCount = 0;
-            std::size_t attachedCount = 0;
+            std::size_t spawnedCount = 0;
+            std::vector<RE::ObjectRefHandle> targets;
 
             cell.ForEachReference(
                 [&](RE::TESObjectREFR* reference)
@@ -1705,53 +1637,68 @@ namespace f4ffmpeg
                     }
 
                     ++targetCount;
-                    const auto referenceFormId = reference->GetFormID();
-                    const auto* baseObject = reference->GetObjectReference();
-
-                    REX::INFO(
-                        "f4ffmpeg Nuka-Cola target matched by {}: reference {:08X}, base form {:08X}, 3D={}.",
-                        source,
-                        referenceFormId,
-                        baseObject != nullptr
-                            ? baseObject->GetFormID()
-                            : 0,
-                        reference->Get3D() != nullptr
-                            ? "ready"
-                            : "unavailable"
-                    );
-
-                    {
-                        std::scoped_lock lock(
-                            injectedNukaColaMachineReferencesMutex
-                        );
-                        if (injectedNukaColaMachineReferences.contains(
-                                referenceFormId))
-                        {
-                            return RE::BSContainer::ForEachResult::kContinue;
-                        }
-                    }
-
-                    if (injectNukaColaMachineScreen(*reference))
-                    {
-                        std::scoped_lock lock(
-                            injectedNukaColaMachineReferencesMutex
-                        );
-                        injectedNukaColaMachineReferences.emplace(
-                            referenceFormId
-                        );
-                        ++attachedCount;
-                    }
+                    targets.emplace_back(reference->GetHandle());
 
                     return RE::BSContainer::ForEachResult::kContinue;
                 }
             );
 
+            // Creating a reference changes the cell's reference collection, so
+            // defer all spawns until its enumeration has completed.
+            for (const auto& targetHandle : targets)
+            {
+                auto reference = targetHandle.get();
+                if (reference == nullptr)
+                    continue;
+
+                const auto referenceFormId = reference->GetFormID();
+                const auto* baseObject = reference->GetObjectReference();
+
+                REX::INFO(
+                    "f4ffmpeg Nuka-Cola target matched by {}: reference {:08X}, base form {:08X}.",
+                    source,
+                    referenceFormId,
+                    baseObject != nullptr
+                        ? baseObject->GetFormID()
+                        : 0
+                );
+
+                {
+                    std::scoped_lock lock(
+                        injectedNukaColaMachineReferencesMutex
+                    );
+                    if (injectedNukaColaMachineReferences.contains(
+                            referenceFormId))
+                    {
+                        continue;
+                    }
+
+                    injectedNukaColaMachineReferences.emplace(
+                        referenceFormId
+                    );
+                }
+
+                if (injectNukaColaMachineScreen(*reference))
+                {
+                    ++spawnedCount;
+                }
+                else
+                {
+                    std::scoped_lock lock(
+                        injectedNukaColaMachineReferencesMutex
+                    );
+                    injectedNukaColaMachineReferences.erase(
+                        referenceFormId
+                    );
+                }
+            }
+
             REX::INFO(
-                "f4ffmpeg scanned Nuka-Cola screen targets from {}: {} reference(s), {} target match(es), {} attachment(s).",
+                "f4ffmpeg scanned Nuka-Cola screen targets from {}: {} reference(s), {} target match(es), {} screen reference(s) spawned.",
                 source,
                 referenceCount,
                 targetCount,
-                attachedCount
+                spawnedCount
             );
         }
 
@@ -1785,108 +1732,6 @@ namespace f4ffmpeg
         };
 
         nukaColaMachineCellSink nukaColaMachineCellEventSink;
-
-        using referenceLoad3D_t = RE::NiAVObject* (*) (
-            RE::TESObjectREFR*,
-            bool
-        );
-
-        REL::Relocation<referenceLoad3D_t> originalReferenceLoad3D;
-
-        RE::NiAVObject* referenceLoad3DHook(
-            RE::TESObjectREFR* reference,
-            bool backgroundLoading)
-        {
-            auto* root = originalReferenceLoad3D(reference, backgroundLoading);
-
-            if (!nukaColaMachineScreenInjectionEnabled ||
-                reference == nullptr ||
-                root == nullptr ||
-                !isNukaColaMachineScreenTarget(*reference))
-            {
-                return root;
-            }
-
-            const auto formId = reference->GetFormID();
-            if (backgroundLoading)
-            {
-                // Clone3D and scene-graph attachment are main-thread work. The
-                // cell-loaded event remains responsible for this reference.
-                REX::INFO(
-                    "f4ffmpeg encountered Nuka-Cola screen target reference {:08X} during background Load3D; deferring attachment to the cell-loaded path.",
-                    formId
-                );
-                return root;
-            }
-
-            {
-                std::scoped_lock lock(injectedNukaColaMachineReferencesMutex);
-                if (injectedNukaColaMachineReferences.contains(formId))
-                    return root;
-            }
-
-            REX::INFO(
-                "f4ffmpeg encountered Nuka-Cola screen target reference {:08X}; attaching commercial screen.",
-                formId
-            );
-
-            if (injectNukaColaMachineScreen(*reference, root))
-            {
-                std::scoped_lock lock(injectedNukaColaMachineReferencesMutex);
-                injectedNukaColaMachineReferences.emplace(formId);
-            }
-
-            return root;
-        }
-
-        bool installNukaColaMachineScreenHook()
-        {
-            if (!nukaColaMachineScreenInjectionEnabled)
-                return true;
-
-            constexpr std::size_t referenceLoad3DVtableIndex = 0x86;
-            REX::INFO(
-                "f4ffmpeg initializing TESObjectREFR::Load3D hook for Nuka-Cola screen injection."
-            );
-            REL::Relocation<std::uintptr_t> vtable{
-                RE::TESObjectREFR::VTABLE[0]
-            };
-
-            const auto original = *reinterpret_cast<const std::uintptr_t*>(
-                vtable.address() + sizeof(void*) * referenceLoad3DVtableIndex
-            );
-            if (original == 0)
-            {
-                REX::WARN(
-                    "f4ffmpeg could not resolve TESObjectREFR::Load3D; disabling Nuka-Cola screen injection."
-                );
-                nukaColaMachineScreenInjectionEnabled = false;
-                return false;
-            }
-
-            originalReferenceLoad3D = original;
-            vtable.write_vfunc(
-                referenceLoad3DVtableIndex,
-                referenceLoad3DHook
-            );
-
-            const auto patched = *reinterpret_cast<const std::uintptr_t*>(
-                vtable.address() + sizeof(void*) * referenceLoad3DVtableIndex
-            );
-            if (patched != reinterpret_cast<std::uintptr_t>(&referenceLoad3DHook))
-            {
-                REX::WARN(
-                    "f4ffmpeg failed to patch TESObjectREFR::Load3D; disabling Nuka-Cola screen injection."
-                );
-                nukaColaMachineScreenInjectionEnabled = false;
-                return false;
-            }
-
-            REX::INFO(
-                "f4ffmpeg TESObjectREFR::Load3D hook initialized for Nuka-Cola screen injection."
-            );
-            return true;
-        }
 
         bool buildReplacementIndex()
         {
@@ -5016,6 +4861,12 @@ namespace f4ffmpeg
         );
     }
 
+    void resetNukaColaMachineScreenInjection()
+    {
+        std::scoped_lock lock(injectedNukaColaMachineReferencesMutex);
+        injectedNukaColaMachineReferences.clear();
+    }
+
     bool initializeNifHandler()
     {
         static std::once_flag initializeOnce;
@@ -5059,16 +4910,11 @@ namespace f4ffmpeg
                     config::enableNukaColaMachineScreens.GetValue();
                 nukaColaMachineScreenSourceForm =
                     config::nukaColaMachineScreenSourceForm.GetValue();
-                nukaColaMachineScreenSanitization = lowercasePath(
-                    config::nukaColaMachineScreenSanitization.GetValue()
-                );
-
                 REX::INFO(
-                    "f4ffmpeg Extra Nuka-Cola screen config: enabled={}, target forms={}, source form='{}', sanitization='{}'.",
+                    "f4ffmpeg Extra Nuka-Cola screen config: enabled={}, target forms={}, source form='{}'.",
                     nukaColaMachineScreenInjectionEnabled,
                     config::nukaColaMachineScreenTargets.GetValue().size(),
-                    nukaColaMachineScreenSourceForm,
-                    nukaColaMachineScreenSanitization
+                    nukaColaMachineScreenSourceForm
                 );
 
                 for (const auto& editorId :
@@ -5091,26 +4937,6 @@ namespace f4ffmpeg
                             lowercasePath(editorId)
                         );
                     }
-                }
-
-                for (const auto& editorId :
-                     config::nukaWorldLocationEditorIds.GetValue())
-                {
-                    if (!editorId.empty())
-                        nukaWorldLocationEditorIds.emplace(
-                            lowercasePath(editorId)
-                        );
-                }
-
-                if (nukaColaMachineScreenSanitization != "never" &&
-                    nukaColaMachineScreenSanitization != "outsidenukaworld" &&
-                    nukaColaMachineScreenSanitization != "everywhere")
-                {
-                    REX::WARN(
-                        "f4ffmpeg unknown Extra.NukaColaMachineScreenSanitization '{}'; using OutsideNukaWorld.",
-                        config::nukaColaMachineScreenSanitization.GetValue()
-                    );
-                    nukaColaMachineScreenSanitization = "outsidenukaworld";
                 }
 
                 if (nukaColaMachineScreenInjectionEnabled &&
@@ -5139,13 +4965,12 @@ namespace f4ffmpeg
                             std::addressof(nukaColaMachineCellEventSink)
                         );
                         REX::INFO(
-                            "f4ffmpeg Nuka-Cola screen injection enabled for {} base form selector(s) ({} EditorID, {} FormID), Nuka-World source form='{}', sanitization={}.",
+                            "f4ffmpeg Nuka-Cola screen injection enabled for {} base form selector(s) ({} EditorID, {} FormID), source form='{}'.",
                             nukaColaMachineScreenTargets.size() +
                                 nukaColaMachineScreenTargetFormIds.size(),
                             nukaColaMachineScreenTargets.size(),
                             nukaColaMachineScreenTargetFormIds.size(),
-                            nukaColaMachineScreenSourceForm,
-                            nukaColaMachineScreenSanitization
+                            nukaColaMachineScreenSourceForm
                         );
                     }
                 }
@@ -5176,13 +5001,6 @@ namespace f4ffmpeg
 
                 if (!installTextureHooks())
                     return;
-
-                if (!installNukaColaMachineScreenHook())
-                {
-                    REX::WARN(
-                        "f4ffmpeg Nuka-Cola screen injection is unavailable; normal texture replacement remains active."
-                    );
-                }
 
                 if (!installEffectTextureHook())
                 {

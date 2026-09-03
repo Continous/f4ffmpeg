@@ -120,6 +120,12 @@ namespace Main
 
 		switch (message->type)
 		{
+			case F4SE::MessagingInterface::kPreLoadGame:
+			{
+				f4ffmpeg::resetNukaColaMachineScreenInjection();
+				break;
+			}
+
 			case F4SE::MessagingInterface::kGameDataReady:
 			{
 				if (!isGameReady)

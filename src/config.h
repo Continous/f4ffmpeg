@@ -70,9 +70,9 @@ namespace f4ffmpeg::config
         false
     };
 
-    // Optional Nuka-World commercial-screen injection for configured machine
-    // base-form editor IDs. The NIF is intentionally opt-in because its local
-    // transform only fits compatible machine models.
+    // Optional Nuka-World commercial-screen spawning for configured machine
+    // base-form editor IDs. This is intentionally opt-in because the source
+    // form is only compatible with selected machine models.
     inline REX::TTomlSetting<bool> enableNukaColaMachineScreens{
         "Extra",
         "EnableNukaColaMachineScreens",
@@ -85,25 +85,11 @@ namespace f4ffmpeg::config
         {}
     };
 
-    // The DLC04 base form whose 3D is the commercial-screen effect NIF.
+    // The DLC04 base form spawned beside each configured machine.
     inline REX::TTomlSetting<std::string> nukaColaMachineScreenSourceForm{
         "Extra",
         "NukaColaMachineScreenSourceForm",
-        "NukaColaMachineCommercialFx"
-    };
-
-    // Never, OutsideNukaWorld, or Everywhere. Sanitization disables the
-    // injected NIF's controller chain, including its autoplay sound event.
-    inline REX::TTomlSetting<std::string> nukaColaMachineScreenSanitization{
-        "Extra",
-        "NukaColaMachineScreenSanitization",
-        "OutsideNukaWorld"
-    };
-
-    inline REX::TTomlSetting<std::vector<std::string>> nukaWorldLocationEditorIds{
-        "Extra",
-        "NukaWorldLocationEditorIds",
-        {"DLC04NukaWorld"}
+        "NukaColaMachineCommercialFxDLC04"
     };
 
     inline REX::TTomlSetting<std::string> debugDecodeKey{
