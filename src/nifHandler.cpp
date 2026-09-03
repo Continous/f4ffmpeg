@@ -1608,16 +1608,16 @@ namespace f4ffmpeg
 
             RE::NiPointer<RE::NiAVObject> screenRoot;
             REX::INFO(
-                "f4ffmpeg cloning Nuka-Cola screen source form '{}' for reference {:08X}.",
+                "f4ffmpeg loading Nuka-Cola screen source form '{}' graphics for reference {:08X}.",
                 nukaColaMachineScreenSourceForm,
                 reference.GetFormID()
             );
-            sourceForm->Clone3D(&reference, screenRoot);
+            screenRoot.reset(sourceForm->LoadGraphics(&reference));
 
             if (screenRoot == nullptr)
             {
                 REX::WARN(
-                    "f4ffmpeg could not clone Nuka-World screen source form '{}'; disabling screen injection for this session.",
+                    "f4ffmpeg could not load Nuka-World screen source form '{}' graphics; disabling screen injection for this session.",
                     nukaColaMachineScreenSourceForm
                 );
                 nukaColaMachineScreenInjectionEnabled = false;
