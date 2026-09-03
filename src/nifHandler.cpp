@@ -1669,8 +1669,13 @@ namespace f4ffmpeg
                 reference.GetFormID()
             );
             parent->AttachChild(screenRoot.get(), false);
+
+            // AttachChild updates hierarchy ownership, but a standalone clone
+            // has not passed through a reference's normal post-attach lifecycle.
+            // This initializes the clone for culling and renderer registration.
+            screenRoot->PostAttachUpdate();
             REX::INFO(
-                "f4ffmpeg attached Nuka-Cola commercial screen to reference {:08X} (sanitized={}).",
+                "f4ffmpeg attached and post-initialized Nuka-Cola commercial screen to reference {:08X} (sanitized={}).",
                 reference.GetFormID(),
                 shouldSanitizeNukaColaMachineScreen(reference)
             );
