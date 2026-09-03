@@ -1815,8 +1815,8 @@ namespace f4ffmpeg
             std::size_t objectsVisited = 0;
             std::size_t objectControllerChainsCleared = 0;
             std::size_t propertyControllerChainsCleared = 0;
-            std::size_t videoUvMaterialsReset = 0;
-            std::size_t videoUvMaterialResetFailures = 0;
+            std::size_t videoUvMaterialsExpanded = 0;
+            std::size_t videoUvMaterialExpansionFailures = 0;
         };
 
         bool isIndexedVideoTextureName(
@@ -1850,7 +1850,9 @@ namespace f4ffmpeg
             failed
         };
 
-        shaderUvCleanResult resetShaderUvTransform(
+        constexpr float nukaColaCommercialAtlasDimension = 16.0F;
+
+        shaderUvCleanResult expandNukaColaCommercialAtlasUv(
             RE::BSShaderProperty* shaderProperty)
         {
             if (shaderProperty == nullptr || shaderProperty->material == nullptr)
@@ -1858,15 +1860,29 @@ namespace f4ffmpeg
 
             auto* sourceMaterial = shaderProperty->material;
 
-            bool needsReset = false;
+            // NukaColaMachineCommercialFx.nif does NOT store a 1/16 material
+            // scale. Its BSEffectShaderProperty is authored at offset (0,0),
+            // scale (1,1), while the BSTriShape's packed vertex UVs occupy one
+            // 1/16 x 1/16 atlas cell. The two float controllers animate U/V
+            // offsets in exact 0.0625 steps over that 16x16 atlas.
+            //
+            // Once the atlas DDS is replaced with an ordinary video frame, the
+            // material therefore has to magnify the mesh UVs by 16 after the
+            // offset controllers are detached. Resetting to identity merely
+            // leaves the video cropped to its upper-left ~1/16 x 1/16 region.
+            bool needsExpansion = false;
             for (std::size_t uvSet = 0; uvSet < 2; ++uvSet)
             {
-                needsReset = needsReset ||
-                    sourceMaterial->texCoordOffset[uvSet] != RE::NiPoint2::ZERO ||
-                    sourceMaterial->texCoordScale[uvSet] != RE::NiPoint2::UNIT;
+                const auto& offset = sourceMaterial->texCoordOffset[uvSet];
+                const auto& scale = sourceMaterial->texCoordScale[uvSet];
+
+                needsExpansion = needsExpansion ||
+                    offset != RE::NiPoint2::ZERO ||
+                    scale.x != nukaColaCommercialAtlasDimension ||
+                    scale.y != nukaColaCommercialAtlasDimension;
             }
 
-            if (!needsReset)
+            if (!needsExpansion)
                 return shaderUvCleanResult::unchanged;
 
             auto* cleanMaterial = sourceMaterial->Create();
@@ -1878,16 +1894,19 @@ namespace f4ffmpeg
             for (std::size_t uvSet = 0; uvSet < 2; ++uvSet)
             {
                 cleanMaterial->texCoordOffset[uvSet] = RE::NiPoint2::ZERO;
-                cleanMaterial->texCoordScale[uvSet] = RE::NiPoint2::UNIT;
+                cleanMaterial->texCoordScale[uvSet].x =
+                    nukaColaCommercialAtlasDimension;
+                cleanMaterial->texCoordScale[uvSet].y =
+                    nukaColaCommercialAtlasDimension;
             }
 
             // Do not mutate sourceMaterial in place: shader materials may be
             // shared across scene instances. SetMaterial(false) lets Fallout
-            // hash/deduplicate the clean copy and own the material it assigns.
+            // hash/deduplicate the atlas-expanded copy and own the material.
             shaderProperty->SetMaterial(cleanMaterial, false);
             delete cleanMaterial;
 
-            // Any passes constructed against the atlas transform are stale now.
+            // Any passes constructed against the atlas-cell transform are stale.
             shaderProperty->DoClearRenderPasses();
             return shaderUvCleanResult::reset;
         }
@@ -1976,13 +1995,13 @@ namespace f4ffmpeg
                         continue;
                     }
 
-                    switch (resetShaderUvTransform(shaderProperty))
+                    switch (expandNukaColaCommercialAtlasUv(shaderProperty))
                     {
                         case shaderUvCleanResult::reset:
-                            ++stats.videoUvMaterialsReset;
+                            ++stats.videoUvMaterialsExpanded;
                             break;
                         case shaderUvCleanResult::failed:
-                            ++stats.videoUvMaterialResetFailures;
+                            ++stats.videoUvMaterialExpansionFailures;
                             break;
                         case shaderUvCleanResult::unchanged:
                         default:
@@ -2026,20 +2045,20 @@ namespace f4ffmpeg
 
             // HandlePre3D marks only references created by this plugin. Sanitize
             // the complete spawned scene graph before it can retain flipbook UV
-            // controllers or an atlas-sized material transform.
+            // controllers, then expand its baked 1/16-cell UVs back to full-frame.
             nukaColaSanitizationStats stats{};
             sanitizeNukaColaMachineScreenObject(root, stats);
 
             REX::INFO(
                 "f4ffmpeg sanitized Nuka-Cola commercial screen reference {:08X} after Load3D: "
                 "{} scene object(s), {} object controller chain(s), {} property controller chain(s), "
-                "{} video UV material(s) reset, {} UV reset failure(s).",
+                "{} video UV material(s) atlas-expanded, {} UV expansion failure(s).",
                 reference->GetFormID(),
                 stats.objectsVisited,
                 stats.objectControllerChainsCleared,
                 stats.propertyControllerChainsCleared,
-                stats.videoUvMaterialsReset,
-                stats.videoUvMaterialResetFailures
+                stats.videoUvMaterialsExpanded,
+                stats.videoUvMaterialExpansionFailures
             );
             return root;
         }
@@ -4342,7 +4361,10 @@ namespace f4ffmpeg
                 {
                     // The DLC04 Nuka commercial is authored as a UV flipbook. A
                     // video SRV must see the full 0..1 UV range instead of one
-                    // atlas cell. Apply this whenever the exact Nuka screen texture
+                    // 1/16 x 1/16 atlas cell. The NIF bakes that cell into the
+                    // BSTriShape vertex UVs, so after detaching the offset
+                    // controllers we magnify the shader UV transform by 16.
+                    // Apply this whenever the exact Nuka screen texture
                     // is actually resolved to an f4ffmpeg target, including
                     // Bethesda-placed Nuka-World FX references that were never
                     // created through our spawn path.
@@ -4355,7 +4377,7 @@ namespace f4ffmpeg
                             );
 
                         const auto uvResult =
-                            resetShaderUvTransform(shaderProperty);
+                            expandNukaColaCommercialAtlasUv(shaderProperty);
 
                         if (controllerChainCleared ||
                             uvResult == shaderUvCleanResult::reset)
@@ -4369,14 +4391,14 @@ namespace f4ffmpeg
                                     ? "cleared"
                                     : "already clear",
                                 uvResult == shaderUvCleanResult::reset
-                                    ? "identity reset"
-                                    : "already identity"
+                                    ? "16x atlas expansion"
+                                    : "already 16x"
                             );
                         }
                         else if (uvResult == shaderUvCleanResult::failed)
                         {
                             REX::TRACE(
-                                "f4ffmpeg could not identity-reset Nuka-Cola commercial UV material for property={}.",
+                                "f4ffmpeg could not expand Nuka-Cola commercial atlas UV material for property={}.",
                                 static_cast<const void*>(shaderProperty)
                             );
                         }
