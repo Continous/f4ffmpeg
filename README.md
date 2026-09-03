@@ -36,6 +36,8 @@ Playlist INIs may include `[Location.<BGSLocation editor ID>]` blocks, with opti
 
 `[Extra]` can spawn Nuka-World's commercial-screen reference beside an allowlist of compatible machine base forms or placed references. Enable it with `EnableNukaColaMachineScreens` and list forms in `NukaColaMachineScreenTargets`. Entries may be base/reference EditorIDs or eight-digit hexadecimal FormIDs, such as `["00034661", "000302DC"]`; TOML array entries must be comma-separated. `NukaColaMachineScreenSourceForm` is created using Fallout's native reference-creation path at the machine's position and rotation, so its 3D and streaming lifecycle remain engine-managed. The screen texture is replaced through the normal `Data/Video/actors/dlc04/nukatron/nukaandcappycommercial01_d.*` mapping.
 
+`NukaColaMachineScreenSanitization` is `Never`, `OutsideNukaWorld`, or `Everywhere`. Sanitization is scoped to references spawned by f4ffmpeg and removes their controller chain after Fallout loads their 3D, suppressing the commercial animation and autoplay sound while retaining the screen geometry. `NukaWorldLocationEditorIds` controls what counts as Nuka-World territory.
+
 ## Content Recommendations.
 
 1. Keep resolution reasonable.

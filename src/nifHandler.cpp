@@ -1308,12 +1308,16 @@ namespace f4ffmpeg
 
         std::unordered_set<std::string> nukaColaMachineScreenTargets;
         std::unordered_set<RE::TESFormID> nukaColaMachineScreenTargetFormIds;
+        std::unordered_set<std::string> nukaWorldLocationEditorIds;
         std::unordered_set<RE::TESFormID> injectedNukaColaMachineReferences;
         std::mutex injectedNukaColaMachineReferencesMutex;
+        std::unordered_set<RE::TESFormID> sanitizedNukaColaMachineScreenReferences;
+        std::mutex sanitizedNukaColaMachineScreenReferencesMutex;
         bool nukaColaMachineScreenInjectionEnabled = false;
         std::string nukaColaMachineScreenSourceForm;
         RE::TESBoundObject* nukaColaMachineScreenSource = nullptr;
         std::mutex nukaColaMachineScreenSourceMutex;
+        std::string nukaColaMachineScreenSanitization;
         std::atomic_bool nukaColaMachineCellEventObserved = false;
 
         std::unordered_map<
@@ -1497,6 +1501,32 @@ namespace f4ffmpeg
             }
         }
 
+        bool isNukaWorldLocation(const RE::BGSLocation* location)
+        {
+            for (; location != nullptr; location = location->parentLoc)
+            {
+                const char* editorId = location->GetFormEditorID();
+                if (editorId != nullptr &&
+                    nukaWorldLocationEditorIds.contains(lowercasePath(editorId)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        bool shouldSanitizeNukaColaMachineScreen(
+            const RE::TESObjectREFR& reference)
+        {
+            if (nukaColaMachineScreenSanitization == "everywhere")
+                return true;
+            if (nukaColaMachineScreenSanitization != "outsidenukaworld")
+                return false;
+
+            return !isNukaWorldLocation(reference.GetCurrentLocation());
+        }
+
         bool isNukaColaMachineScreenTarget(
             const RE::TESObjectREFR& reference)
         {
@@ -1530,6 +1560,28 @@ namespace f4ffmpeg
                     lowercasePath(referenceEditorId)
                 );
         }
+
+        class nukaColaMachineScreenSpawnData final :
+            public RE::NEW_REFR_DATA
+        {
+        public:
+            void HandlePre3D(RE::TESObjectREFR* reference) override
+            {
+                if (reference == nullptr || !sanitize)
+                    return;
+
+                sanitizedReferenceFormId = reference->GetFormID();
+                std::scoped_lock lock(
+                    sanitizedNukaColaMachineScreenReferencesMutex
+                );
+                sanitizedNukaColaMachineScreenReferences.emplace(
+                    sanitizedReferenceFormId
+                );
+            }
+
+            bool sanitize = false;
+            RE::TESFormID sanitizedReferenceFormId = 0;
+        };
 
         bool injectNukaColaMachineScreen(
             RE::TESObjectREFR& reference)
@@ -1586,8 +1638,9 @@ namespace f4ffmpeg
 
             // This is the native equivalent of PlaceAtMe: the screen is a real
             // sibling reference, so Fallout owns its 3D and streaming lifecycle.
-            RE::NEW_REFR_DATA spawn{};
+            nukaColaMachineScreenSpawnData spawn{};
             spawn.object = sourceForm;
+            spawn.sanitize = shouldSanitizeNukaColaMachineScreen(reference);
             spawn.location = reference.GetPosition();
             spawn.direction = reference.data.angle;
             spawn.interior = cell->IsInterior() ? cell : nullptr;
@@ -1597,6 +1650,16 @@ namespace f4ffmpeg
             const auto spawned = dataHandler->CreateReferenceAtLocation(spawn);
             if (!spawned)
             {
+                if (spawn.sanitizedReferenceFormId != 0)
+                {
+                    std::scoped_lock lock(
+                        sanitizedNukaColaMachineScreenReferencesMutex
+                    );
+                    sanitizedNukaColaMachineScreenReferences.erase(
+                        spawn.sanitizedReferenceFormId
+                    );
+                }
+
                 REX::WARN(
                     "f4ffmpeg could not spawn Nuka-Cola commercial screen '{}' for reference {:08X}.",
                     nukaColaMachineScreenSourceForm,
@@ -1732,6 +1795,91 @@ namespace f4ffmpeg
         };
 
         nukaColaMachineCellSink nukaColaMachineCellEventSink;
+
+        using referenceLoad3D_t = RE::NiAVObject* (*) (
+            RE::TESObjectREFR*,
+            bool
+        );
+
+        REL::Relocation<referenceLoad3D_t> originalReferenceLoad3D;
+
+        RE::NiAVObject* referenceLoad3DHook(
+            RE::TESObjectREFR* reference,
+            bool backgroundLoading)
+        {
+            auto* root = originalReferenceLoad3D(reference, backgroundLoading);
+            if (reference == nullptr || root == nullptr)
+                return root;
+
+            bool shouldSanitize = false;
+            {
+                std::scoped_lock lock(
+                    sanitizedNukaColaMachineScreenReferencesMutex
+                );
+                shouldSanitize = sanitizedNukaColaMachineScreenReferences.contains(
+                    reference->GetFormID()
+                );
+            }
+
+            if (!shouldSanitize)
+                return root;
+
+            // HandlePre3D marked only references created by this plugin. The
+            // controller chain owns the commercial animation and autoplay sound.
+            root->controllers.reset();
+            REX::INFO(
+                "f4ffmpeg sanitized Nuka-Cola commercial screen reference {:08X} after Load3D.",
+                reference->GetFormID()
+            );
+            return root;
+        }
+
+        bool installNukaColaMachineScreenSanitizationHook()
+        {
+            if (!nukaColaMachineScreenInjectionEnabled ||
+                nukaColaMachineScreenSanitization == "never")
+            {
+                return true;
+            }
+
+            constexpr std::size_t referenceLoad3DVtableIndex = 0x86;
+            REL::Relocation<std::uintptr_t> vtable{
+                RE::TESObjectREFR::VTABLE[0]
+            };
+
+            const auto original = *reinterpret_cast<const std::uintptr_t*>(
+                vtable.address() + sizeof(void*) * referenceLoad3DVtableIndex
+            );
+            if (original == 0)
+            {
+                REX::WARN(
+                    "f4ffmpeg could not resolve TESObjectREFR::Load3D; Nuka-Cola screen references will retain their controllers."
+                );
+                return false;
+            }
+
+            originalReferenceLoad3D = original;
+            vtable.write_vfunc(
+                referenceLoad3DVtableIndex,
+                referenceLoad3DHook
+            );
+
+            const auto patched = *reinterpret_cast<const std::uintptr_t*>(
+                vtable.address() + sizeof(void*) * referenceLoad3DVtableIndex
+            );
+            if (patched != reinterpret_cast<std::uintptr_t>(&referenceLoad3DHook))
+            {
+                REX::WARN(
+                    "f4ffmpeg failed to patch TESObjectREFR::Load3D; Nuka-Cola screen references will retain their controllers."
+                );
+                return false;
+            }
+
+            REX::INFO(
+                "f4ffmpeg scoped Nuka-Cola screen sanitization hook initialized."
+            );
+            return true;
+        }
 
         bool buildReplacementIndex()
         {
@@ -4863,8 +5011,12 @@ namespace f4ffmpeg
 
     void resetNukaColaMachineScreenInjection()
     {
-        std::scoped_lock lock(injectedNukaColaMachineReferencesMutex);
+        std::scoped_lock lock(
+            injectedNukaColaMachineReferencesMutex,
+            sanitizedNukaColaMachineScreenReferencesMutex
+        );
         injectedNukaColaMachineReferences.clear();
+        sanitizedNukaColaMachineScreenReferences.clear();
     }
 
     bool initializeNifHandler()
@@ -4910,11 +5062,15 @@ namespace f4ffmpeg
                     config::enableNukaColaMachineScreens.GetValue();
                 nukaColaMachineScreenSourceForm =
                     config::nukaColaMachineScreenSourceForm.GetValue();
+                nukaColaMachineScreenSanitization = lowercasePath(
+                    config::nukaColaMachineScreenSanitization.GetValue()
+                );
                 REX::INFO(
-                    "f4ffmpeg Extra Nuka-Cola screen config: enabled={}, target forms={}, source form='{}'.",
+                    "f4ffmpeg Extra Nuka-Cola screen config: enabled={}, target forms={}, source form='{}', sanitization='{}'.",
                     nukaColaMachineScreenInjectionEnabled,
                     config::nukaColaMachineScreenTargets.GetValue().size(),
-                    nukaColaMachineScreenSourceForm
+                    nukaColaMachineScreenSourceForm,
+                    nukaColaMachineScreenSanitization
                 );
 
                 for (const auto& editorId :
@@ -4939,6 +5095,28 @@ namespace f4ffmpeg
                     }
                 }
 
+                for (const auto& editorId :
+                     config::nukaWorldLocationEditorIds.GetValue())
+                {
+                    if (!editorId.empty())
+                    {
+                        nukaWorldLocationEditorIds.emplace(
+                            lowercasePath(editorId)
+                        );
+                    }
+                }
+
+                if (nukaColaMachineScreenSanitization != "never" &&
+                    nukaColaMachineScreenSanitization != "outsidenukaworld" &&
+                    nukaColaMachineScreenSanitization != "everywhere")
+                {
+                    REX::WARN(
+                        "f4ffmpeg unknown Extra.NukaColaMachineScreenSanitization '{}'; using OutsideNukaWorld.",
+                        config::nukaColaMachineScreenSanitization.GetValue()
+                    );
+                    nukaColaMachineScreenSanitization = "outsidenukaworld";
+                }
+
                 if (nukaColaMachineScreenInjectionEnabled &&
                     nukaColaMachineScreenTargets.empty() &&
                     nukaColaMachineScreenTargetFormIds.empty())
@@ -4950,6 +5128,13 @@ namespace f4ffmpeg
                 }
                 else if (nukaColaMachineScreenInjectionEnabled)
                 {
+                    if (!installNukaColaMachineScreenSanitizationHook())
+                    {
+                        REX::WARN(
+                            "f4ffmpeg Nuka-Cola screen spawning remains enabled without controller sanitization."
+                        );
+                    }
+
                     auto* cellEventSource =
                         RE::TESCellFullyLoadedEvent::GetEventSource();
                     if (nukaColaMachineScreenInjectionEnabled &&

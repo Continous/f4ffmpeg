@@ -92,6 +92,20 @@ namespace f4ffmpeg::config
         "NukaColaMachineCommercialFxDLC04"
     };
 
+    // Never, OutsideNukaWorld, or Everywhere. Sanitization disables only the
+    // spawned screen reference's controller chain after its 3D is created.
+    inline REX::TTomlSetting<std::string> nukaColaMachineScreenSanitization{
+        "Extra",
+        "NukaColaMachineScreenSanitization",
+        "OutsideNukaWorld"
+    };
+
+    inline REX::TTomlSetting<std::vector<std::string>> nukaWorldLocationEditorIds{
+        "Extra",
+        "NukaWorldLocationEditorIds",
+        {"DLC04NukaWorld"}
+    };
+
     inline REX::TTomlSetting<std::string> debugDecodeKey{
         "Debug",
         "DecodeKey",

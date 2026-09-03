@@ -15,3 +15,8 @@ EnableNukaColaMachineScreens = false
 # arrays require commas: ["00034661", "000302DC"].
 NukaColaMachineScreenTargets = []
 NukaColaMachineScreenSourceForm = "NukaColaMachineCommercialFxDLC04"
+
+# "Never", "OutsideNukaWorld", or "Everywhere". Sanitization removes the
+# spawned screen's controller chain, including its commercial autoplay sound.
+NukaColaMachineScreenSanitization = "OutsideNukaWorld"
+NukaWorldLocationEditorIds = ["DLC04NukaWorld"]
