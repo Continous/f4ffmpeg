@@ -32,11 +32,15 @@ Replacement targets will mirror their actual texture names but instead of Data/T
 
 Playlist INIs may include `[Location.<BGSLocation editor ID>]` blocks, with optional `.Playback`, `.Playlist`, and `.Transition` suffixes. The current player location is tested first, then its parent locations, so the narrowest configured location wins. `Mode=Add` appends that block's playlist entries to the global list; `Mode=Override` replaces the global list. `Loop`, `Shuffle`, and transition values supplied by the location block override only those global values. Each resolved location gets an independent lazy playback manager, so changing location changes playback without restarting unrelated screens. An INI with no global playlist and one or more location playlists is location-only, whether it is standalone or beside a same-stem video: outside a matching location, f4ffmpeg leaves Fallout's original texture in place.
 
+Examples for how you could use this;
+
+1. Add location-specific additions to playlists.
+2. Only replace a texture in specific locations (particularly useful in combination with Nuka-Cola machine screen extra feature below.)
+3. Make a television/display play a specific video in a specific location.
+
 ### Nuka-Cola machine screens
 
 `[Extra]` can spawn Nuka-World's commercial-screen reference beside an allowlist of compatible machine base forms or placed references. Enable it with `EnableNukaColaMachineScreens` and list forms in `NukaColaMachineScreenTargets`. Entries may be base/reference EditorIDs or eight-digit hexadecimal FormIDs, such as `["00034661", "000302DC"]`; TOML array entries must be comma-separated. `NukaColaMachineScreenSourceForm` is created using Fallout's native reference-creation path at the machine's position and rotation, so its 3D and streaming lifecycle remain engine-managed. The screen texture is replaced through the normal `Data/Video/actors/dlc04/nukatron/nukaandcappycommercial01_d.*` mapping.
-
-`NukaColaMachineScreenSanitization` is `Never`, `OutsideNukaWorld`, or `Everywhere`. Sanitization is scoped to references spawned by f4ffmpeg and removes their controller chain after Fallout loads their 3D, suppressing the commercial animation and autoplay sound while retaining the screen geometry. `NukaWorldLocationEditorIds` controls what counts as Nuka-World territory.
 
 ## Content Recommendations.
 
