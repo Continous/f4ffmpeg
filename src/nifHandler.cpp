@@ -1241,6 +1241,9 @@ namespace f4ffmpeg
             videoPlaybackSettings playbackSettings;
         };
 
+        std::optional<resolvedVideoTarget>
+        resolveVideoTarget(const char* texturePath);
+
         struct resolvedLocationPlaybackSettings
         {
             videoPlaybackSettings settings;
@@ -1344,16 +1347,12 @@ namespace f4ffmpeg
 
         std::unordered_set<std::string> nukaColaMachineScreenTargets;
         std::unordered_set<RE::TESFormID> nukaColaMachineScreenTargetFormIds;
-        std::unordered_set<std::string> nukaWorldLocationEditorIds;
         std::unordered_set<RE::TESFormID> injectedNukaColaMachineReferences;
         std::mutex injectedNukaColaMachineReferencesMutex;
-        std::unordered_set<RE::TESFormID> sanitizedNukaColaMachineScreenReferences;
-        std::mutex sanitizedNukaColaMachineScreenReferencesMutex;
         bool nukaColaMachineScreenInjectionEnabled = false;
         std::string nukaColaMachineScreenSourceForm;
         RE::TESBoundObject* nukaColaMachineScreenSource = nullptr;
         std::mutex nukaColaMachineScreenSourceMutex;
-        std::string nukaColaMachineScreenSanitization;
         std::atomic_bool nukaColaMachineCellEventObserved = false;
 
         std::unordered_map<
@@ -1537,30 +1536,11 @@ namespace f4ffmpeg
             }
         }
 
-        bool isNukaWorldLocation(const RE::BGSLocation* location)
+        bool isNukaColaCommercialVideoReplacementActive()
         {
-            for (; location != nullptr; location = location->parentLoc)
-            {
-                const char* editorId = location->GetFormEditorID();
-                if (editorId != nullptr &&
-                    nukaWorldLocationEditorIds.contains(lowercasePath(editorId)))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        bool shouldSanitizeNukaColaMachineScreen(
-            const RE::TESObjectREFR& reference)
-        {
-            if (nukaColaMachineScreenSanitization == "everywhere")
-                return true;
-            if (nukaColaMachineScreenSanitization != "outsidenukaworld")
-                return false;
-
-            return !isNukaWorldLocation(reference.GetCurrentLocation());
+            return resolveVideoTarget(
+                nukaColaCommercialScreenTexture.data()
+            ).has_value();
         }
 
         bool isNukaColaMachineScreenTarget(
@@ -1599,25 +1579,7 @@ namespace f4ffmpeg
 
         class nukaColaMachineScreenSpawnData final :
             public RE::NEW_REFR_DATA
-        {
-        public:
-            void HandlePre3D(RE::TESObjectREFR* reference) override
-            {
-                if (reference == nullptr || !sanitize)
-                    return;
-
-                sanitizedReferenceFormId = reference->GetFormID();
-                std::scoped_lock lock(
-                    sanitizedNukaColaMachineScreenReferencesMutex
-                );
-                sanitizedNukaColaMachineScreenReferences.emplace(
-                    sanitizedReferenceFormId
-                );
-            }
-
-            bool sanitize = false;
-            RE::TESFormID sanitizedReferenceFormId = 0;
-        };
+        {};
 
         RE::TESBoundObject* resolveNukaColaMachineScreenSourceForm()
         {
@@ -1658,6 +1620,19 @@ namespace f4ffmpeg
             }
 
             return sourceForm;
+        }
+
+        bool isNukaColaCommercialScreenReference(
+            const RE::TESObjectREFR& reference)
+        {
+            const auto* baseObject = reference.GetObjectReference();
+            if (baseObject == nullptr)
+                return false;
+
+            auto* sourceForm = resolveNukaColaMachineScreenSourceForm();
+            return sourceForm != nullptr &&
+                (baseObject == sourceForm ||
+                 baseObject->GetFormID() == sourceForm->GetFormID());
         }
 
         constexpr float nukaColaScreenPositionTolerance = 16.0F;
@@ -1720,7 +1695,6 @@ namespace f4ffmpeg
             // sibling reference, so Fallout owns its 3D and streaming lifecycle.
             nukaColaMachineScreenSpawnData spawn{};
             spawn.object = sourceForm;
-            spawn.sanitize = shouldSanitizeNukaColaMachineScreen(reference);
             spawn.location = reference.GetPosition();
             spawn.direction = reference.data.angle;
             spawn.interior = cell->IsInterior() ? cell : nullptr;
@@ -1730,16 +1704,6 @@ namespace f4ffmpeg
             const auto spawned = dataHandler->CreateReferenceAtLocation(spawn);
             if (!spawned)
             {
-                if (spawn.sanitizedReferenceFormId != 0)
-                {
-                    std::scoped_lock lock(
-                        sanitizedNukaColaMachineScreenReferencesMutex
-                    );
-                    sanitizedNukaColaMachineScreenReferences.erase(
-                        spawn.sanitizedReferenceFormId
-                    );
-                }
-
                 REX::WARN(
                     "f4ffmpeg could not spawn Nuka-Cola commercial screen '{}' for reference {:08X}.",
                     nukaColaMachineScreenSourceForm,
@@ -1951,6 +1915,7 @@ namespace f4ffmpeg
             std::size_t objectsVisited = 0;
             std::size_t objectControllerChainsCleared = 0;
             std::size_t propertyControllerChainsCleared = 0;
+            std::size_t behaviorGraphsRemoved = 0;
             std::size_t videoUvMaterialsExpanded = 0;
             std::size_t videoUvMaterialExpansionFailures = 0;
         };
@@ -2047,39 +2012,53 @@ namespace f4ffmpeg
             return shaderUvCleanResult::reset;
         }
 
-        bool clearNukaColaVideoFlipbookControllers(
+        bool nukaColaCommercialSurfaceNeedsSanitization(
             RE::BSShaderProperty* shaderProperty,
             RE::BSGeometry* geometry)
         {
-            bool changed = false;
+            if (shaderProperty == nullptr)
+                return false;
 
-            if (shaderProperty != nullptr && shaderProperty->controllers)
+            if (shaderProperty->controllers)
+                return true;
+
+            if (shaderProperty->material == nullptr)
+                return true;
+
+            for (std::size_t uvSet = 0; uvSet < 2; ++uvSet)
             {
-                shaderProperty->controllers.reset();
-                changed = true;
+                const auto& offset =
+                    shaderProperty->material->texCoordOffset[uvSet];
+                const auto& scale =
+                    shaderProperty->material->texCoordScale[uvSet];
+
+                if (offset != RE::NiPoint2::ZERO ||
+                    scale.x != nukaColaCommercialAtlasDimension ||
+                    scale.y != nukaColaCommercialAtlasDimension)
+                {
+                    return true;
+                }
             }
 
-            // Existing Bethesda-placed commercial FX references are not in the
-            // plugin's spawned-reference registry. Walk from the screen geometry
-            // to its NIF root and remove the controller manager/sequence chain too
-            // whenever this exact Nuka screen is being replaced by video.
+            static const RE::BSFixedString behaviorGraphKey{"BGED"};
             for (RE::NiAVObject* current = geometry;
                  current != nullptr;
                  current = current->parent)
             {
-                if (current->controllers)
+                if (current->controllers ||
+                    current->HasExtraData(behaviorGraphKey))
                 {
-                    current->controllers.reset();
-                    changed = true;
+                    return true;
                 }
             }
 
-            return changed;
+            return false;
         }
 
         void sanitizeNukaColaMachineScreenObject(
             RE::NiAVObject* object,
-            nukaColaSanitizationStats& stats)
+            nukaColaSanitizationStats& stats,
+            bool videoReplacementActive)
         {
             if (object == nullptr)
                 return;
@@ -2095,12 +2074,25 @@ namespace f4ffmpeg
                 ++stats.objectControllerChainsCleared;
             }
 
+            // The source NIF also carries BSBehaviorGraphExtraData named "BGED"
+            // pointing at GenericBehaviors\Autoplay\Autoplay.hkx. Its event
+            // sequence includes SoundPlay.DLC04NPCNukaBottleCommercial. When the
+            // surface is actively replaced by video, remove that behavior graph
+            // as part of the same sanitation pass so the vanilla autoplay/sound
+            // machinery cannot continue independently of the swapped texture.
+            static const RE::BSFixedString behaviorGraphKey{"BGED"};
+            if (object->HasExtraData(behaviorGraphKey) &&
+                object->RemoveExtraData(behaviorGraphKey))
+            {
+                ++stats.behaviorGraphsRemoved;
+            }
+
             // The Nuka-World commercial flipbook has animation state on its shader
-            // property. Clear property-local controllers as well, then normalize
-            // the material UV transform for the property whose base texture is an
-            // f4ffmpeg video target. Removing a float controller alone can freeze
-            // the last atlas crop; identity offset/scale makes the replacement
-            // video occupy the whole authored screen UV range.
+            // property. Clear property-local controllers as well, then expand
+            // the material UV transform for the exact Nuka texture when video is
+            // active. Removing a float controller alone can freeze the last atlas
+            // crop; 16x scale maps the baked 1/16-cell mesh UVs back over the full
+            // replacement frame.
             if (auto* geometry = netimmerse_cast<RE::BSGeometry*>(object))
             {
                 for (auto& property : geometry->properties)
@@ -2125,8 +2117,8 @@ namespace f4ffmpeg
                         ? baseTexture->name.c_str()
                         : nullptr;
 
-                    if (!isNukaColaCommercialScreenTexture(textureName) ||
-                        !isIndexedVideoTextureName(textureName))
+                    if (!videoReplacementActive ||
+                        !isNukaColaCommercialScreenTexture(textureName))
                     {
                         continue;
                     }
@@ -2152,7 +2144,8 @@ namespace f4ffmpeg
                 {
                     sanitizeNukaColaMachineScreenObject(
                         child.get(),
-                        stats
+                        stats,
+                        videoReplacementActive
                     );
                 }
             }
@@ -2166,46 +2159,55 @@ namespace f4ffmpeg
             if (reference == nullptr || root == nullptr)
                 return root;
 
-            bool shouldSanitize = false;
+            // Sanitization is a correctness consequence of replacing this exact
+            // texture, not a separate user policy. This predicate covers both
+            // Bethesda-native DLC04 screen references and references spawned by
+            // f4ffmpeg because both use the configured commercial-screen base
+            // form. Location-only playlists therefore leave vanilla Nuka-World
+            // surfaces untouched unless the replacement resolves in that scope.
+            const bool activeNukaVideoReplacement =
+                isNukaColaCommercialVideoReplacementActive();
+            if (!activeNukaVideoReplacement ||
+                !isNukaColaCommercialScreenReference(*reference))
             {
-                std::scoped_lock lock(
-                    sanitizedNukaColaMachineScreenReferencesMutex
-                );
-                shouldSanitize = sanitizedNukaColaMachineScreenReferences.contains(
-                    reference->GetFormID()
-                );
+                return root;
             }
 
-            if (!shouldSanitize)
-                return root;
-
-            // HandlePre3D marks only references created by this plugin. Sanitize
-            // the complete spawned scene graph before it can retain flipbook UV
-            // controllers, then expand its baked 1/16-cell UVs back to full-frame.
             nukaColaSanitizationStats stats{};
-            sanitizeNukaColaMachineScreenObject(root, stats);
+            sanitizeNukaColaMachineScreenObject(
+                root,
+                stats,
+                true
+            );
 
             REX::INFO(
-                "f4ffmpeg sanitized Nuka-Cola commercial screen reference {:08X} after Load3D: "
-                "{} scene object(s), {} object controller chain(s), {} property controller chain(s), "
+                "f4ffmpeg sanitized actively replaced Nuka-Cola commercial screen reference {:08X} after Load3D: "
+                "{} scene object(s), {} object controller chain(s), "
+                "{} property controller chain(s), {} behavior graph(s) removed, "
                 "{} video UV material(s) atlas-expanded, {} UV expansion failure(s).",
                 reference->GetFormID(),
                 stats.objectsVisited,
                 stats.objectControllerChainsCleared,
                 stats.propertyControllerChainsCleared,
+                stats.behaviorGraphsRemoved,
                 stats.videoUvMaterialsExpanded,
                 stats.videoUvMaterialExpansionFailures
             );
             return root;
         }
 
-        bool installNukaColaMachineScreenSanitizationHook()
+        bool installNukaColaActiveReplacementSanitizationHook()
         {
-            if (!nukaColaMachineScreenInjectionEnabled ||
-                nukaColaMachineScreenSanitization == "never")
-            {
+            const bool indexedNukaVideoReplacement =
+                isIndexedVideoTextureName(
+                    nukaColaCommercialScreenTexture.data()
+                );
+
+            // No Nuka replacement can ever resolve if the exact texture is not
+            // indexed, so there is nothing for the Load3D sanitizer to do. The
+            // hook is independent of optional screen injection.
+            if (!indexedNukaVideoReplacement)
                 return true;
-            }
 
             constexpr std::size_t referenceLoad3DVtableIndex = 0x86;
             REL::Relocation<std::uintptr_t> vtable{
@@ -2241,7 +2243,7 @@ namespace f4ffmpeg
             }
 
             REX::INFO(
-                "f4ffmpeg scoped Nuka-Cola screen sanitization hook initialized."
+                "f4ffmpeg Nuka-Cola active-replacement sanitization hook initialized."
             );
             return true;
         }
@@ -4504,38 +4506,47 @@ namespace f4ffmpeg
                     // is actually resolved to an f4ffmpeg target, including
                     // Bethesda-placed Nuka-World FX references that were never
                     // created through our spawn path.
-                    if (isNukaColaCommercialScreenTexture(textureName))
+                    if (isNukaColaCommercialScreenTexture(textureName) &&
+                        nukaColaCommercialSurfaceNeedsSanitization(
+                            shaderProperty,
+                            geometry
+                        ))
                     {
-                        const bool controllerChainCleared =
-                            clearNukaColaVideoFlipbookControllers(
-                                shaderProperty,
-                                geometry
-                            );
+                        // Load3D handles native surfaces that load while this
+                        // replacement is already active. This render-time pass is
+                        // the late-activation fallback: if the surface was loaded
+                        // before a location-specific target became active, climb
+                        // to the NIF root and run the same full sanitation now.
+                        RE::NiAVObject* root = geometry;
+                        while (root != nullptr && root->parent != nullptr)
+                            root = root->parent;
 
-                        const auto uvResult =
-                            expandNukaColaCommercialAtlasUv(shaderProperty);
+                        nukaColaSanitizationStats stats{};
+                        sanitizeNukaColaMachineScreenObject(
+                            root,
+                            stats,
+                            true
+                        );
 
-                        if (controllerChainCleared ||
-                            uvResult == shaderUvCleanResult::reset)
+                        if (stats.objectControllerChainsCleared != 0 ||
+                            stats.propertyControllerChainsCleared != 0 ||
+                            stats.behaviorGraphsRemoved != 0 ||
+                            stats.videoUvMaterialsExpanded != 0 ||
+                            stats.videoUvMaterialExpansionFailures != 0)
                         {
                             REX::INFO(
-                                "f4ffmpeg de-flipbooked Nuka-Cola commercial video geometry '{}': controllers={}, UV={}",
+                                "f4ffmpeg actively sanitized swapped Nuka-Cola commercial geometry '{}': "
+                                "{} object controller chain(s), {} property controller chain(s), "
+                                "{} behavior graph(s) removed, {} UV material(s) atlas-expanded, "
+                                "{} UV expansion failure(s).",
                                 geometry != nullptr && geometry->name.c_str() != nullptr
                                     ? geometry->name.c_str()
                                     : "<unnamed>",
-                                controllerChainCleared
-                                    ? "cleared"
-                                    : "already clear",
-                                uvResult == shaderUvCleanResult::reset
-                                    ? "16x atlas expansion"
-                                    : "already 16x"
-                            );
-                        }
-                        else if (uvResult == shaderUvCleanResult::failed)
-                        {
-                            REX::TRACE(
-                                "f4ffmpeg could not expand Nuka-Cola commercial atlas UV material for property={}.",
-                                static_cast<const void*>(shaderProperty)
+                                stats.objectControllerChainsCleared,
+                                stats.propertyControllerChainsCleared,
+                                stats.behaviorGraphsRemoved,
+                                stats.videoUvMaterialsExpanded,
+                                stats.videoUvMaterialExpansionFailures
                             );
                         }
                     }
@@ -5525,11 +5536,9 @@ namespace f4ffmpeg
     void resetNukaColaMachineScreenInjection()
     {
         std::scoped_lock lock(
-            injectedNukaColaMachineReferencesMutex,
-            sanitizedNukaColaMachineScreenReferencesMutex
+            injectedNukaColaMachineReferencesMutex
         );
         injectedNukaColaMachineReferences.clear();
-        sanitizedNukaColaMachineScreenReferences.clear();
     }
 
     bool initializeNifHandler()
@@ -5575,15 +5584,11 @@ namespace f4ffmpeg
                     config::enableNukaColaMachineScreens.GetValue();
                 nukaColaMachineScreenSourceForm =
                     config::nukaColaMachineScreenSourceForm.GetValue();
-                nukaColaMachineScreenSanitization = lowercasePath(
-                    config::nukaColaMachineScreenSanitization.GetValue()
-                );
                 REX::INFO(
-                    "f4ffmpeg Extra Nuka-Cola screen config: enabled={}, target forms={}, source form='{}', sanitization='{}'.",
+                    "f4ffmpeg Extra Nuka-Cola screen config: enabled={}, target forms={}, source form='{}'.",
                     nukaColaMachineScreenInjectionEnabled,
                     config::nukaColaMachineScreenTargets.GetValue().size(),
-                    nukaColaMachineScreenSourceForm,
-                    nukaColaMachineScreenSanitization
+                    nukaColaMachineScreenSourceForm
                 );
 
                 for (const auto& editorId :
@@ -5608,28 +5613,6 @@ namespace f4ffmpeg
                     }
                 }
 
-                for (const auto& editorId :
-                     config::nukaWorldLocationEditorIds.GetValue())
-                {
-                    if (!editorId.empty())
-                    {
-                        nukaWorldLocationEditorIds.emplace(
-                            lowercasePath(editorId)
-                        );
-                    }
-                }
-
-                if (nukaColaMachineScreenSanitization != "never" &&
-                    nukaColaMachineScreenSanitization != "outsidenukaworld" &&
-                    nukaColaMachineScreenSanitization != "everywhere")
-                {
-                    REX::WARN(
-                        "f4ffmpeg unknown Extra.NukaColaMachineScreenSanitization '{}'; using OutsideNukaWorld.",
-                        config::nukaColaMachineScreenSanitization.GetValue()
-                    );
-                    nukaColaMachineScreenSanitization = "outsidenukaworld";
-                }
-
                 if (nukaColaMachineScreenInjectionEnabled &&
                     nukaColaMachineScreenTargets.empty() &&
                     nukaColaMachineScreenTargetFormIds.empty())
@@ -5641,13 +5624,6 @@ namespace f4ffmpeg
                 }
                 else if (nukaColaMachineScreenInjectionEnabled)
                 {
-                    if (!installNukaColaMachineScreenSanitizationHook())
-                    {
-                        REX::WARN(
-                            "f4ffmpeg Nuka-Cola screen spawning remains enabled without controller sanitization."
-                        );
-                    }
-
                     auto* cellEventSource =
                         RE::TESCellFullyLoadedEvent::GetEventSource();
                     if (nukaColaMachineScreenInjectionEnabled &&
@@ -5691,6 +5667,18 @@ namespace f4ffmpeg
                     REX::WARN(
                         "f4ffmpeg replacement index encountered filesystem "
                         "errors; successfully indexed entries remain usable."
+                    );
+                }
+
+                // Install after indexing. Sanitization is enabled only when the
+                // exact Nuka commercial texture is indexed, and each Load3D call
+                // still checks whether that replacement resolves in the current
+                // location/worldspace before touching the reference.
+                if (!installNukaColaActiveReplacementSanitizationHook())
+                {
+                    REX::WARN(
+                        "f4ffmpeg could not install Nuka-Cola Load3D sanitation; "
+                        "render-time active-swap sanitation remains available."
                     );
                 }
 
