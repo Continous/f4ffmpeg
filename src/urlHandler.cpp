@@ -121,7 +121,7 @@ namespace f4ffmpeg
         PROCESS_INFORMATION pi{};
         const BOOL created = ::CreateProcessA(
             "cmd.exe",
-            cmdLine.data(),
+            const_cast<char*>(cmdLine.data()),
             nullptr,
             nullptr,
             TRUE,
