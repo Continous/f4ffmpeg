@@ -70,7 +70,7 @@ namespace f4ffmpeg::config
 
         applyLogLevel();
 
-        spdlog::debug(
+        REX::DEBUG(
             "Streaming.CookieSource={}, Streaming.CookieValue={}",
             cookieSource.GetValue(),
             cookieValue.GetValue()

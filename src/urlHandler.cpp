@@ -5,7 +5,7 @@
 #include <string>
 #include <filesystem>
 
-#include <spdlog/spdlog.h>
+#include <REX/LOG.h>
 
 #include <windows.h>
 
@@ -75,8 +75,8 @@ namespace f4ffmpeg
         {
             if (cookieData.empty())
             {
-                spdlog::debug(
-                    "f4ffmpeg: urlHandler - cookie source {} configured but CookieData is empty; proceeding without cookies",
+                REX::DEBUG(
+                    "urlHandler - cookie source {} configured but CookieValue is empty; proceeding without cookies",
                     cookieSource
                 );
             }
@@ -91,8 +91,8 @@ namespace f4ffmpeg
         }
         else if (cookieSource != kCookieSourceNone)
         {
-            spdlog::debug(
-                "f4ffmpeg: urlHandler - unknown cookie source {}; treating as no cookies",
+            REX::DEBUG(
+                "urlHandler - unknown cookie source {}; treating as no cookies",
                 cookieSource
             );
         }
@@ -134,8 +134,8 @@ namespace f4ffmpeg
 
         if (!created)
         {
-            spdlog::debug(
-                "f4ffmpeg: urlHandler - failed to spawn cmd.exe for: {}",
+            REX::WARN(
+                "urlHandler - failed to spawn cmd.exe for: {}",
                 command
             );
             ::CloseHandle(outRead);
@@ -165,8 +165,8 @@ namespace f4ffmpeg
         ::CloseHandle(pi.hThread);
 
         if (timedOut)
-            spdlog::debug(
-                "f4ffmpeg: urlHandler - yt-dlp timed out after {}s and was terminated",
+            REX::WARN(
+                "urlHandler - yt-dlp timed out after {}s and was terminated",
                 timeout.count()
             );
 
@@ -187,8 +187,8 @@ namespace f4ffmpeg
             return std::nullopt;
 
         // Full trace of what the process produced, success or failure.
-        spdlog::trace(
-            "f4ffmpeg: urlHandler - yt-dlp output for '{}':\nSTDOUT:\n{}\nSTDERR:\n{}",
+        REX::TRACE(
+            "urlHandler - yt-dlp output for '{}':\nSTDOUT:\n{}\nSTDERR:\n{}",
             url,
             stdoutOut,
             stderrOut
@@ -200,12 +200,10 @@ namespace f4ffmpeg
         if (begin == std::string::npos)
         {
             if (stderrOut.find("not recognized") != std::string::npos)
-                spdlog::debug(
-                    "f4ffmpeg: urlHandler - yt-dlp not found/valid on PATH"
-                );
+                REX::WARN("urlHandler - yt-dlp not found/valid on PATH");
             else
-                spdlog::debug(
-                    "f4ffmpeg: urlHandler - yt-dlp returned no direct URL for '{}'",
+                REX::DEBUG(
+                    "urlHandler - yt-dlp returned no direct URL for '{}'",
                     url
                 );
             return std::nullopt;
