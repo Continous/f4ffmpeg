@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <REX/TTomlSetting.h>
@@ -90,6 +91,24 @@ namespace f4ffmpeg::config
         "Extra",
         "NukaColaMachineScreenSourceForm",
         "NukaColaMachineCommercialFxDLC04"
+    };
+
+    // URL-resolver cookie handling for playlist entries that are network
+    // URLs (resolved via yt-dlp). Values:
+    //   0 = no cookies
+    //   1 = --cookies-from-browser CookieValue (e.g. "chrome")
+    //   2 = --cookies CookieValue (path to a cookies.txt file)
+    inline REX::TTomlSetting<std::int32_t> cookieSource{
+        "Streaming",
+        "CookieSource",
+        0
+    };
+
+    // Argument passed to the cookie flag selected by CookieSource.
+    inline REX::TTomlSetting<std::string> cookieValue{
+        "Streaming",
+        "CookieValue",
+        ""
     };
 
     inline REX::TTomlSetting<std::string> debugDecodeKey{

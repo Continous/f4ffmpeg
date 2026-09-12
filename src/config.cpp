@@ -71,6 +71,12 @@ namespace f4ffmpeg::config
         applyLogLevel();
 
         spdlog::debug(
+            "Streaming.CookieSource={}, Streaming.CookieValue={}",
+            cookieSource.GetValue(),
+            cookieValue.GetValue()
+        );
+
+        spdlog::debug(
             "Playback.ConversionQuality={}",
             conversionQuality.GetValue()
         );

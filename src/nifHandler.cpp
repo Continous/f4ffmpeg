@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "nifHandler.h"
+#include "urlHandler.h"
 #include "manager.h"
 #include "config.h"
 
@@ -514,8 +515,22 @@ namespace f4ffmpeg
             if (entry.empty())
                 return;
 
+            // If entry looks like a URL, attempt to resolve it via yt-dlp
+            std::string resolvedEntry = entry;
+            if (startsWithInsensitive(entry, "http://") ||
+               startsWithInsensitive(entry, "https://"))
+            {
+                auto optPath = resolveUrl(
+                    entry,
+                    config::cookieSource.GetValue(),
+                    config::cookieValue.GetValue()
+                );
+                if (optPath)
+                    resolvedEntry = optPath->string();
+            }
+
             std::filesystem::path entryPath{
-                entry
+                resolvedEntry
             };
 
             if (entryPath.is_relative())
