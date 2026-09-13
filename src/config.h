@@ -111,6 +111,16 @@ namespace f4ffmpeg::config
         ""
     };
 
+    // Full path to yt-dlp.exe. Leave empty to auto-detect: we probe
+    // "%~dp0" and "%SYSTEMROOT%" before falling back to the process
+    // PATH. Use this to pin the resolver if f4ffmpeg runs on a system
+    // where yt-dlp is installed somewhere unusual.
+    inline REX::TTomlSetting<std::string> ytDlpPath{
+        "Streaming",
+        "YtDlpPath",
+        ""
+    };
+
     inline REX::TTomlSetting<std::string> debugDecodeKey{
         "Debug",
         "DecodeKey",

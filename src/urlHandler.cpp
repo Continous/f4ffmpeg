@@ -11,22 +11,76 @@
 
 namespace f4ffmpeg
 {
-    // Escapes a string for safe embedding inside a double-quoted argument
-    // of a `cmd.exe` command line. Sufficient for well-formed URLs from
-    // INI values (no `|`, `;`, backticks).
-    static std::string ShellQuote(const std::string& value)
+    // Quotes a single argument per the MSVCRT command-line parsing rules
+    // (runs of backslashes before a quote are folded so the quote is
+    // preserved literally). The resolved yt-dlp.exe parses its own command
+    // line with this convention, so this replaces the old cmd.exe shell.
+    static std::string QuoteArg(const std::string& value)
     {
         std::string quoted;
         quoted.reserve(value.size() + 2);
         quoted.push_back('"');
-        for (const auto c : value)
+
+        size_t backslashRun = 0;
+        for (const char c : value)
         {
-            if (c == '"' || c == '\\')
+            if (c == '\\')
+            {
+                ++backslashRun;
+                continue;
+            }
+
+            if (backslashRun != 0u)
+                quoted.append(backslashRun, '\\');
+            backslashRun = 0u;
+
+            if (c == '"')
                 quoted.push_back('\\');
             quoted.push_back(c);
         }
+        if (backslashRun != 0u)
+            quoted.append(backslashRun, '\\');
+
         quoted.push_back('"');
         return quoted;
+    }
+
+    // Locates yt-dlp.exe. Resolution order: configured Streaming.YtDlpPath
+    // (when it exists on disk), then the game process directory, then the
+    // process PATH. Empty string if nothing was found.
+    static std::string
+    findYtDlp(const std::string& configuredPath)
+    {
+        if (!configuredPath.empty())
+        {
+            if (std::filesystem::exists(configuredPath))
+                return configuredPath;
+
+            REX::WARN(
+                "urlHandler - configured YtDlpPath {} does not exist",
+                configuredPath
+            );
+        }
+
+        char exePath[MAX_PATH]{};
+        const DWORD exePathLen =
+            ::GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+        if (exePathLen != 0u && exePathLen < MAX_PATH)
+        {
+            const std::filesystem::path candidate(
+                std::filesystem::path{exePath}.parent_path() / "yt-dlp.exe"
+            );
+            if (std::filesystem::exists(candidate))
+                return candidate.string();
+        }
+
+        char searchBuffer[MAX_PATH]{};
+        const DWORD found =
+            ::SearchPathA(nullptr, "yt-dlp.exe", nullptr, searchBuffer);
+        if (found != 0u)
+            return searchBuffer;
+
+        return std::string{};
     }
 
     static HANDLE
@@ -54,11 +108,12 @@ namespace f4ffmpeg
             out.append(buffer, bytesRead);
     }
 
-    // Spawns `cmd.exe /d /c yt-dlp ...`, applying the configured cookie
-    // mode. Captures stdout and stderr separately. Returns false if the
-    // process could not be spawned.
+    // Spawns the resolved yt-dlp.exe directly (no cmd.exe wrapper), applying
+    // the configured cookie mode. Captures stdout and stderr separately.
+    // Returns false if the process could not be spawned.
     static bool
     spawnYtDlp(
+        const std::string& exePath,
         const std::string& url,
         int cookieSource,
         const std::string& cookieData,
@@ -68,7 +123,7 @@ namespace f4ffmpeg
     )
     {
         std::string command =
-            "yt-dlp -g -f best --get-url " + ShellQuote(url);
+            QuoteArg(exePath) + " -g -f best --get-url " + QuoteArg(url);
 
         if (cookieSource == kCookieSourceFromBrowser ||
             cookieSource == kCookieSourceFile)
@@ -86,7 +141,7 @@ namespace f4ffmpeg
                     (cookieSource == kCookieSourceFromBrowser
                         ? " --cookies-from-browser "
                         : " --cookies ") +
-                    ShellQuote(cookieData);
+                    QuoteArg(cookieData);
             }
         }
         else if (cookieSource != kCookieSourceNone)
@@ -96,8 +151,6 @@ namespace f4ffmpeg
                 cookieSource
             );
         }
-
-        const std::string cmdLine = "cmd.exe /d /c " + command;
 
         HANDLE outWrite = nullptr;
         HANDLE errWrite = nullptr;
