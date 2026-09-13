@@ -78,7 +78,7 @@ namespace f4ffmpeg
 
         char searchBuffer[MAX_PATH]{};
         const DWORD found =
-            ::SearchPathA(nullptr, "yt-dlp.exe", nullptr, searchBuffer, MAX_PATH);
+            ::SearchPathA("yt-dlp.exe", nullptr, nullptr, searchBuffer);
         if (found != 0u)
             return searchBuffer;
 
@@ -242,7 +242,7 @@ namespace f4ffmpeg
         std::string exePath = findYtDlp(config::ytDlpPath);
         if (exePath.empty())
         {
-            REX::ERROR("urlHandler - could not locate yt-dlp.exe");
+            REX::WARN("urlHandler - could not locate yt-dlp.exe");
             return std::nullopt;
         }
 
