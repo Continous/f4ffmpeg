@@ -1,8 +1,10 @@
 #include "pch.h"
 #include "urlHandler.h"
+#include "config.h"
 
 #include <cstdint>
 #include <string>
+#include <vector>
 #include <filesystem>
 
 #include <REX/LOG.h>
@@ -76,7 +78,7 @@ namespace f4ffmpeg
 
         char searchBuffer[MAX_PATH]{};
         const DWORD found =
-            ::SearchPathA(nullptr, "yt-dlp.exe", nullptr, searchBuffer);
+            ::SearchPathA(nullptr, "yt-dlp.exe", nullptr, searchBuffer, MAX_PATH);
         if (found != 0u)
             return searchBuffer;
 
@@ -172,9 +174,12 @@ namespace f4ffmpeg
         si.dwFlags = STARTF_USESTDHANDLES;
 
         PROCESS_INFORMATION pi{};
+        std::vector<char> cmdLineBuf(command.begin(), command.end());
+        cmdLineBuf.push_back('\0');
+
         const BOOL created = ::CreateProcessA(
-            "cmd.exe",
-            const_cast<char*>(cmdLine.data()),
+            nullptr,
+            cmdLineBuf.data(),
             nullptr,
             nullptr,
             TRUE,
@@ -188,7 +193,7 @@ namespace f4ffmpeg
         if (!created)
         {
             REX::WARN(
-                "urlHandler - failed to spawn cmd.exe for: {}",
+                "urlHandler - failed to spawn yt-dlp.exe for: {}",
                 command
             );
             ::CloseHandle(outRead);
@@ -234,9 +239,16 @@ namespace f4ffmpeg
         std::chrono::seconds timeout
     )
     {
+        std::string exePath = findYtDlp(config::ytDlpPath);
+        if (exePath.empty())
+        {
+            REX::ERROR("urlHandler - could not locate yt-dlp.exe");
+            return std::nullopt;
+        }
+
         std::string stdoutOut;
         std::string stderrOut;
-        if (!spawnYtDlp(url, cookieSource, cookieData, timeout, stdoutOut, stderrOut))
+        if (!spawnYtDlp(exePath, url, cookieSource, cookieData, timeout, stdoutOut, stderrOut))
             return std::nullopt;
 
         // Full trace of what the process produced, success or failure.
