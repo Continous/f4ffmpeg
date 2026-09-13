@@ -78,7 +78,7 @@ namespace f4ffmpeg
 
         char searchBuffer[MAX_PATH]{};
         const DWORD found =
-            ::SearchPathA(nullptr, "yt-dlp.exe", nullptr, searchBuffer, nullptr, nullptr);
+            ::SearchPathA(nullptr, "yt-dlp.exe", nullptr, MAX_PATH, searchBuffer, nullptr);
         if (found != 0u)
             return searchBuffer;
 
