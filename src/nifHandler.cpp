@@ -1025,7 +1025,7 @@ namespace f4ffmpeg
                 if (entryError)
                 {
                     REX::WARN(
-                        "f4ffmpeg could not inspect playlist media '{}' from '{}': {}.",
+                        "f4ffmpeg could not inspect playlist media '{}' from '{}'.",
                         entry,
                         iniPath.string()
                     );
