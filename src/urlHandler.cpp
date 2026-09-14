@@ -239,7 +239,9 @@ namespace f4ffmpeg
         const DWORD waitResult =
             ::WaitForSingleObject(pi.hProcess, waitTimeout);
 
-        if (waitResult == WAIT_TIMEOUT)
+        const bool timedOut = (waitResult == WAIT_TIMEOUT);
+
+        if (timedOut)
         {
             ::TerminateProcess(pi.hProcess, 1u);
             ::WaitForSingleObject(pi.hProcess, INFINITE);
