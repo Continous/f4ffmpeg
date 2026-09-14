@@ -86,16 +86,28 @@ namespace f4ffmpeg
     }
 
     static HANDLE
-    createPipe(HANDLE writeEnd)
+    createPipe(HANDLE& writeEnd)
     {
         SECURITY_ATTRIBUTES sa{};
         sa.nLength = sizeof(SECURITY_ATTRIBUTES);
         sa.bInheritHandle = TRUE;
 
         HANDLE readEnd = nullptr;
+
         if (!::CreatePipe(&readEnd, &writeEnd, &sa, 0u))
             return nullptr;
-        ::SetHandleInformation(readEnd, HANDLE_FLAG_INHERIT, 0u);
+
+        if (!::SetHandleInformation(
+                readEnd,
+                HANDLE_FLAG_INHERIT,
+                0u))
+        {
+            ::CloseHandle(readEnd);
+            ::CloseHandle(writeEnd);
+            writeEnd = nullptr;
+            return nullptr;
+        }
+
         return readEnd;
     }
 
@@ -125,7 +137,7 @@ namespace f4ffmpeg
     )
     {
         std::string command =
-            QuoteArg(exePath) + " -g -f best --get-url " + QuoteArg(url);
+            QuoteArg(exePath) + " -g -f best " + QuoteArg(url);
 
         if (cookieSource == kCookieSourceFromBrowser ||
             cookieSource == kCookieSourceFile)
@@ -172,6 +184,7 @@ namespace f4ffmpeg
         si.hStdOutput = outWrite;
         si.hStdError = errWrite;
         si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = ::GetStdHandle(STD_INPUT_HANDLE);
 
         PROCESS_INFORMATION pi{};
         std::vector<char> cmdLineBuf(command.begin(), command.end());
@@ -204,10 +217,27 @@ namespace f4ffmpeg
         }
 
         const DWORD waitResult =
-            ::WaitForSingleObject(pi.hProcess, static_cast<DWORD>(timeout.count()));
+            ::WaitForSingleObject(pi.hProcess, static_cast<DWORD>(std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count());
         const bool timedOut = (waitResult == WAIT_TIMEOUT);
-        if (timedOut)
+        std::thread stdoutThread([&]() {
+            drainPipe(outRead, stdoutOut);
+        });
+
+        std::thread stderrThread([&]() {
+            drainPipe(errRead, stderrOut);
+        });
+
+        const DWORD waitResult =
+            ::WaitForSingleObject(...);
+
+        if (waitResult == WAIT_TIMEOUT)
+        {
             ::TerminateProcess(pi.hProcess, 1u);
+            ::WaitForSingleObject(pi.hProcess, INFINITE);
+        }
+
+        stdoutThread.join();
+        stderrThread.join();
 
         DWORD exitCode = 0;
         ::GetExitCodeProcess(pi.hProcess, &exitCode);
