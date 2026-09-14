@@ -1004,10 +1004,6 @@ namespace f4ffmpeg
                     entry
                 };
 
-                const std::filesystem::path entryPath{
-                    entry
-                };
-
                 if (!isSupportedVideoPath(entryPath))
                 {
                     REX::WARN(
@@ -1031,8 +1027,7 @@ namespace f4ffmpeg
                     REX::WARN(
                         "f4ffmpeg could not inspect playlist media '{}' from '{}': {}.",
                         entry,
-                        iniPath.string(),
-                        entryError.message()
+                        iniPath.string()
                     );
 
                     continue;
