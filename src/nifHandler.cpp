@@ -993,6 +993,17 @@ namespace f4ffmpeg
 
             for (const auto& entry : settings.playlist)
             {
+                if (startsWithInsensitive(entry, "http://") ||
+                    startsWithInsensitive(entry, "https://"))
+                {
+                    validatedPlaylist.emplace_back(entry);
+                    continue;
+                }
+
+                const std::filesystem::path entryPath{
+                    entry
+                };
+
                 const std::filesystem::path entryPath{
                     entry
                 };
