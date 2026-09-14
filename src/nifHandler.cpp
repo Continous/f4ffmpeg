@@ -80,7 +80,7 @@ namespace f4ffmpeg
         // Keep .mov first for backward-compatible collision precedence.
         // The decoder itself is FFmpeg-backed; nifHandler only needs to avoid
         // treating unrelated Data\\Video sidecars/config files as video inputs.
-        constexpr std::array<std::string_view, 12>
+        constexpr std::array<std::string_view, 13>
             supportedVideoExtensions{
                 ".mov",
                 ".mp4",
