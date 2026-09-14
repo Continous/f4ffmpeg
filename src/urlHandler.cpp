@@ -216,9 +216,14 @@ namespace f4ffmpeg
             return false;
         }
 
-        const DWORD waitResult =
-            ::WaitForSingleObject(pi.hProcess, static_cast<DWORD>(std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count());
-        const bool timedOut = (waitResult == WAIT_TIMEOUT);
+        // The child has inherited the write ends; the parent must close its copies.
+        ::CloseHandle(outWrite);
+        outWrite = nullptr;
+        ::CloseHandle(errWrite);
+        errWrite = nullptr;
+
+        // Drain stdout/stderr while yt-dlp is running so the pipe buffers
+        // cannot fill and deadlock the child.
         std::thread stdoutThread([&]() {
             drainPipe(outRead, stdoutOut);
         });
@@ -227,8 +232,12 @@ namespace f4ffmpeg
             drainPipe(errRead, stderrOut);
         });
 
+        const DWORD waitTimeout = static_cast<DWORD>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count()
+        );
+
         const DWORD waitResult =
-            ::WaitForSingleObject(...);
+            ::WaitForSingleObject(pi.hProcess, waitTimeout);
 
         if (waitResult == WAIT_TIMEOUT)
         {
@@ -242,13 +251,8 @@ namespace f4ffmpeg
         DWORD exitCode = 0;
         ::GetExitCodeProcess(pi.hProcess, &exitCode);
 
-        drainPipe(outRead, stdoutOut);
-        drainPipe(errRead, stderrOut);
-
         ::CloseHandle(outRead);
-        ::CloseHandle(outWrite);
         ::CloseHandle(errRead);
-        ::CloseHandle(errWrite);
         ::CloseHandle(pi.hProcess);
         ::CloseHandle(pi.hThread);
 
