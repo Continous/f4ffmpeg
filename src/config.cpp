@@ -1,13 +1,14 @@
 // config.cpp
+
 #include "config.h"
 
-#include <spdlog/spdlog.h>
 #include <filesystem>
+
+#include <spdlog/spdlog.h>
 #include <toml.hpp>
 
 namespace f4ffmpeg::config
 {
-
     static void applyLogLevel()
     {
         const auto level = logLevel.GetValue();
@@ -71,9 +72,12 @@ namespace f4ffmpeg::config
         applyLogLevel();
 
         REX::DEBUG(
-            "Streaming.CookieSource={}, Streaming.CookieValue={}",
+            "Streaming.CookieSource={}, Streaming.CookieValue={}, "
+            "Streaming.YtDlpPath={}, Streaming.YtDlpFlags={}",
             cookieSource.GetValue(),
-            cookieValue.GetValue()
+            cookieValue.GetValue(),
+            ytDlpPath.GetValue(),
+            ytDlpFlags.GetValue()
         );
 
         spdlog::debug(
@@ -98,7 +102,8 @@ namespace f4ffmpeg::config
         );
 
         spdlog::debug(
-            "Extra.EnableNukaColaMachineScreens={}, Extra.NukaColaMachineScreenTargets={}, "
+            "Extra.EnableNukaColaMachineScreens={}, "
+            "Extra.NukaColaMachineScreenTargets={}, "
             "Extra.NukaColaMachineScreenSourceForm={}",
             enableNukaColaMachineScreens.GetValue(),
             nukaColaMachineScreenTargets.GetValue().size(),

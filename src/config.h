@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+
 #include <REX/TTomlSetting.h>
 
 namespace f4ffmpeg::config
@@ -12,6 +13,7 @@ namespace f4ffmpeg::config
         "Level",
         "info"
     };
+
     inline REX::TTomlSetting<std::string> clockMode{
         "Playback",
         "Clock",
@@ -111,13 +113,30 @@ namespace f4ffmpeg::config
         ""
     };
 
-    // Full path to yt-dlp.exe. Leave empty to auto-detect: we probe
-    // "%~dp0" and "%SYSTEMROOT%" before falling back to the process
-    // PATH. Use this to pin the resolver if f4ffmpeg runs on a system
-    // where yt-dlp is installed somewhere unusual.
+    // Full path to yt-dlp.exe. Leave empty to auto-detect from the Fallout 4
+    // process directory and then the process PATH.
     inline REX::TTomlSetting<std::string> ytDlpPath{
         "Streaming",
         "YtDlpPath",
+        ""
+    };
+
+    // Additional arguments passed verbatim to yt-dlp.
+    //
+    // f4ffmpeg always supplies --get-url itself. Do not add --get-url here.
+    //
+    // This is intentionally a raw command-line string rather than a list so
+    // yt-dlp's normal argument quoting can be used. This also allows users to
+    // configure optional features such as JavaScript runtimes, format
+    // selection, playlists, proxy settings, etc.
+    //
+    // Example:
+    //   YtDlpFlags = '--js-runtimes deno --format "bestvideo[height<=1080]+bestaudio/best"'
+    //
+    // Leave empty to use yt-dlp's defaults.
+    inline REX::TTomlSetting<std::string> ytDlpFlags{
+        "Streaming",
+        "YtDlpFlags",
         ""
     };
 

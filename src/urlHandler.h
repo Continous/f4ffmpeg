@@ -14,13 +14,19 @@ namespace f4ffmpeg
     constexpr std::chrono::seconds kUrlResolveTimeout{20u};
 
     // Cookie source modes (Streaming.CookieSource).
-    constexpr int kCookieSourceNone = 0;              // no cookies
-    constexpr int kCookieSourceFromBrowser = 1;       // --cookies-from-browser <value>
-    constexpr int kCookieSourceFile = 2;              // --cookies <value>
+    constexpr int kCookieSourceNone = 0;
+    constexpr int kCookieSourceFromBrowser = 1;
+    constexpr int kCookieSourceFile = 2;
 
-    // Resolves a network URL (YouTube, Twitch, etc.) to a direct media stream URL or local file path.
-    // Currently relies on yt-dlp. Returns std::nullopt on failure, spawn error,
-    // or timeout. The underlying yt-dlp process is terminated on timeout.
+    // Resolves a network URL (YouTube, Twitch, etc.) to a direct media stream
+    // URL or local file path.
+    //
+    // yt-dlp is responsible for all optional functionality. f4ffmpeg supplies
+    // --get-url itself, while Streaming.YtDlpFlags allows the user to provide
+    // additional yt-dlp arguments.
+    //
+    // Returns std::nullopt on failure, spawn error, or timeout. The underlying
+    // yt-dlp process is terminated on timeout.
     std::optional<std::filesystem::path>
     resolveUrl(
         const std::string& url,
