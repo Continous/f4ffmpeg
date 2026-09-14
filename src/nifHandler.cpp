@@ -93,7 +93,8 @@ namespace f4ffmpeg
                 ".mpeg",
                 ".ts",
                 ".m2ts",
-                ".ogv"
+                ".ogv",
+                ""
             };
 
         // Playlist transition images are pre-decoded once when that manager is lazily activated.
