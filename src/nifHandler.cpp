@@ -534,8 +534,8 @@ namespace f4ffmpeg
                 startsWithInsensitive(resolvedEntry, "https://"))
             {
                 settings.playlist.emplace_back(resolvedEntry);
-                return;
                 REX::TRACE("URL result of {}", resolvedEntry);
+                return;
             }
 
             std::filesystem::path entryPath{
