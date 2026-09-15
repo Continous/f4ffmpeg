@@ -535,6 +535,7 @@ namespace f4ffmpeg
             {
                 settings.playlist.emplace_back(resolvedEntry);
                 return;
+                REX::TRACE("URL result of {}", resolvedEntry);
             }
 
             std::filesystem::path entryPath{
