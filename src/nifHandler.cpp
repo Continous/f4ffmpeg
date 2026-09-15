@@ -1012,6 +1012,7 @@ namespace f4ffmpeg
                     startsWithInsensitive(entry, "https://"))
                 {
                     validatedPlaylist.emplace_back(entry);
+                    REX::DEBUG("URL Validated as {}", entry);
                     continue;
                 }
 
