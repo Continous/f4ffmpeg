@@ -361,7 +361,7 @@ namespace f4ffmpeg
         return !timedOut;
     }
 
-    std::optional<std::filesystem::path>
+    std::optional<std::string>
     resolveUrl(
         const std::string& url,
         int cookieSource,
@@ -447,6 +447,6 @@ namespace f4ffmpeg
         if (firstNewline != std::string::npos)
             firstUrl = firstUrl.substr(0, firstNewline);
 
-        return std::filesystem::path(firstUrl);
+        return firstUrl;
     }
 }

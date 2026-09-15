@@ -527,16 +527,21 @@ namespace f4ffmpeg
                     config::cookieValue.GetValue()
                 );
                 if (optPath)
-                    resolvedEntry = optPath->string();
+                    resolvedEntry = *optPath;
+            }
+
+            if (startsWithInsensitive(resolvedEntry, "http://") ||
+                startsWithInsensitive(resolvedEntry, "https://"))
+            {
+                settings.playlist.emplace_back(resolvedEntry);
+                return;
             }
 
             std::filesystem::path entryPath{
                 resolvedEntry
             };
 
-            if (entryPath.is_relative() &&
-                !startsWithInsensitive(resolvedEntry, "http://") &&
-                !startsWithInsensitive(resolvedEntry, "https://"))
+            if (entryPath.is_relative())
             {
                 entryPath =
                     iniPath.parent_path() /
@@ -561,13 +566,18 @@ namespace f4ffmpeg
             if (entry.empty())
                 return;
 
+            if (startsWithInsensitive(entry, "http://") ||
+                startsWithInsensitive(entry, "https://"))
+            {
+                settings.transitionImage = entry;
+                return;
+            }
+
             std::filesystem::path imagePath{
                 entry
             };
 
-            if (imagePath.is_relative() &&
-                !startsWithInsensitive(entry, "http://") &&
-                !startsWithInsensitive(entry, "https://"))
+            if (imagePath.is_relative())
             {
                 imagePath =
                     iniPath.parent_path() /

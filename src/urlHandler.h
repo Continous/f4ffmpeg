@@ -27,7 +27,7 @@ namespace f4ffmpeg
     //
     // Returns std::nullopt on failure, spawn error, or timeout. The underlying
     // yt-dlp process is terminated on timeout.
-    std::optional<std::filesystem::path>
+    std::optional<std::string>
     resolveUrl(
         const std::string& url,
         int cookieSource = kCookieSourceNone,
