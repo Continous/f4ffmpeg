@@ -534,7 +534,9 @@ namespace f4ffmpeg
                 resolvedEntry
             };
 
-            if (entryPath.is_relative())
+            if (entryPath.is_relative() &&
+                !startsWithInsensitive(resolvedEntry, "http://") &&
+                !startsWithInsensitive(resolvedEntry, "https://"))
             {
                 entryPath =
                     iniPath.parent_path() /
@@ -563,7 +565,9 @@ namespace f4ffmpeg
                 entry
             };
 
-            if (imagePath.is_relative())
+            if (imagePath.is_relative() &&
+                !startsWithInsensitive(entry, "http://") &&
+                !startsWithInsensitive(entry, "https://"))
             {
                 imagePath =
                     iniPath.parent_path() /
