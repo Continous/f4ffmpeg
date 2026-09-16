@@ -1,5 +1,7 @@
 #include "decoder.h"
 #include "frameConverter.h"
+#include "urlHandler.h"
+#include "config.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -1928,6 +1930,68 @@ bool decoder::initializeVideoDecoder()
         {
             close();
         }
+
+        namespace
+        {
+            bool isNetworkSource(std::string_view source)
+            {
+                return source.size() >= 8 &&
+                    (
+                        source.compare(0, 7, "http://", 0, 7) == 0 ||
+                        source.compare(0, 8, "https://", 0, 8) == 0
+                    );
+            }
+        }
+
+        // Network sources are resolved immediately before FFmpeg sees them,
+        // on a decode/activation worker thread (never the game thread). The
+        // resolved media URL is cached with its source so playlist transitions
+        // (decoderWorker::switchSource / rewind-driven restarts) do not pay
+        // for a second yt-dlp spawn inside the presentation path.
+        bool decoder::resolveNetworkSource(
+            const std::string& source,
+            bool forceRefresh)
+        {
+            if (!isNetworkSource(source))
+            {
+                openSource.clear();
+                openResolvedPath.clear();
+                return true;
+            }
+
+            if (!forceRefresh && openSource == source
+                && !openResolvedPath.empty())
+                return true;
+
+            REX::INFO(
+                "f4ffmpeg resolving streaming source via yt-dlp: {}",
+                source
+            );
+
+            const auto resolved =
+                resolveUrl(
+                    source,
+                    config::cookieSource.GetValue(),
+                    config::cookieValue.GetValue()
+                );
+
+            if (!resolved)
+            {
+                REX::WARN(
+                    "f4ffmpeg could not resolve streaming source '{}'.",
+                    source
+                );
+
+                openSource.clear();
+                openResolvedPath.clear();
+                return false;
+            }
+
+            openSource = source;
+            openResolvedPath = *resolved;
+            return true;
+        }
+
         bool decoder::open(const char* path)
     {
         if (path == nullptr)
@@ -1937,46 +2001,106 @@ bool decoder::initializeVideoDecoder()
 
         // Source changes release only source-specific demuxer/codec state.
         // Keep AVHWDeviceContext alive for compatible playlist/shuffle
-        // transitions.
+        // transitions. (openSource/openResolvedPath survive closeSource():
+        // they are a per-source cache so a repeated open of the same network
+        // entry does not spawn yt-dlp again.)
         closeSource();
 
-        AVDictionary* options = nullptr;
-        av_dict_set(&options, "user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", 0);
-        av_dict_set(&options, "timeout", "10000000", 0);
-
-        if (avformat_open_input(
-                &formatContext,
-                path,
-                nullptr,
-                &options) < 0)
+        auto tryOpenPath = [&](const std::string& mediaPath)
+            -> bool
         {
+            AVDictionary* options = nullptr;
+            av_dict_set(&options, "user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", 0);
+            av_dict_set(&options, "timeout", "10000000", 0);
+
+            if (avformat_open_input(
+                    &formatContext,
+                    mediaPath.c_str(),
+                    nullptr,
+                    &options) < 0)
+            {
+                av_dict_free(&options);
+                formatContext = nullptr;
+                return false;
+            }
+
             av_dict_free(&options);
-            formatContext = nullptr;
-            return false;
-        }
 
-        av_dict_free(&options);
+            if (avformat_find_stream_info(
+                    formatContext,
+                    nullptr) < 0)
+            {
+                closeSource();
+                return false;
+            }
 
-        if (avformat_find_stream_info(
-                formatContext,
-                nullptr) < 0)
+            return true;
+        };
+
+        const bool networkSrc = isNetworkSource(path);
+
+        if (!resolveNetworkSource(path))
         {
-            closeSource();
             return false;
         }
 
-        const auto dumpGeneration =
-            frameDumpGeneration.load(
-                std::memory_order_acquire
+        const std::string mediaPath =
+            openResolvedPath.empty()
+                ? std::string{path}
+                : openResolvedPath;
+
+        if (tryOpenPath(mediaPath))
+        {
+            const auto dumpGeneration =
+                frameDumpGeneration.load(
+                    std::memory_order_acquire
+                );
+
+            handledDecodedFrameDumpGeneration =
+                dumpGeneration;
+
+            handledProducedFrameDumpGeneration =
+                dumpGeneration;
+
+            return true;
+        }
+
+        // A signed media URL can expire between yt-dlp resolving it and
+        // FFmpeg opening it. Force a fresh resolution and retry once.
+        if (networkSrc)
+        {
+            REX::WARN(
+                "FFmpeg could not open streamed media URL for '{}'; "
+                "re-resolving source and retrying.",
+                path
             );
 
-        handledDecodedFrameDumpGeneration =
-            dumpGeneration;
+            if (
+                resolveNetworkSource(path, /*forceRefresh=*/true) &&
+                tryOpenPath(openResolvedPath))
+            {
+                const auto dumpGeneration =
+                    frameDumpGeneration.load(
+                        std::memory_order_acquire
+                    );
 
-        handledProducedFrameDumpGeneration =
-            dumpGeneration;
+                handledDecodedFrameDumpGeneration =
+                    dumpGeneration;
 
-        return true;
+                handledProducedFrameDumpGeneration =
+                    dumpGeneration;
+
+                return true;
+            }
+        }
+
+        REX::WARN(
+            "Decoder failed to open source '{}'.",
+            path
+        );
+
+        closeSource();
+        return false;
     }
 
     void decoder::closeSource()

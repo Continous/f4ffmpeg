@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 
 extern "C"
 {
@@ -134,6 +135,21 @@ namespace f4ffmpeg
         );
 
         void closeSource();
+
+        // Resolves http/https sources via yt-dlp before FFmpeg opens them.
+        // Non-network paths pass through unchanged. Resulting media URL is
+        // cached per source so repeated opens of the same playlist entry do
+        // not spawn yt-dlp again.
+        bool resolveNetworkSource(
+            const std::string& source,
+            bool forceRefresh = false);
+
+        // Original network source currently open (empty for file sources).
+        std::string openSource{};
+
+        // Media URL actually handed to FFmpeg, resolved from openSource when
+        // applicable.
+        std::string openResolvedPath{};
 
         AVFormatContext* formatContext = nullptr;
         AVCodecContext* codecContext = nullptr;

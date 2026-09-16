@@ -210,6 +210,16 @@ namespace f4ffmpeg
             return -1;
         }
 
+        // Network URIs (http/https) are valid streaming playlist entries.
+        // They are resolved via yt-dlp at load time and handed to FFmpeg
+        // verbatim; file-existence and extension checks do not apply.
+        bool isSupportedVideoUrl(
+            std::string_view entry)
+        {
+            return startsWithInsensitive(entry, "http://") ||
+                   startsWithInsensitive(entry, "https://");
+        }
+
         bool isSupportedVideoPath(
             const std::filesystem::path& path)
         {
@@ -516,30 +526,23 @@ namespace f4ffmpeg
             if (entry.empty())
                 return;
 
-            // If entry looks like a URL, attempt to resolve it via yt-dlp
-            std::string resolvedEntry = entry;
-            if (startsWithInsensitive(entry, "http://") ||
-               startsWithInsensitive(entry, "https://"))
+            // Network entries are retained verbatim. Resolution is deferred
+            // to decoder activation (see decoder::open): yt-dlp's direct media
+            // URLs are signed and expire, so resolving at INI/index load time
+            // frequently hands FFmpeg an already-expired URL by the time the
+            // lazy manager actually starts playback.
+            if (isSupportedVideoUrl(entry))
             {
-                auto optPath = resolveUrl(
-                    entry,
-                    config::cookieSource.GetValue(),
-                    config::cookieValue.GetValue()
+                settings.playlist.emplace_back(entry);
+                REX::TRACE(
+                    "URL queued for deferred resolution: {}",
+                    entry
                 );
-                if (optPath)
-                    resolvedEntry = *optPath;
-            }
-
-            if (startsWithInsensitive(resolvedEntry, "http://") ||
-                startsWithInsensitive(resolvedEntry, "https://"))
-            {
-                settings.playlist.emplace_back(resolvedEntry);
-                REX::TRACE("URL result of {}", resolvedEntry);
                 return;
             }
 
             std::filesystem::path entryPath{
-                resolvedEntry
+                entry
             };
 
             if (entryPath.is_relative())
@@ -1094,6 +1097,12 @@ namespace f4ffmpeg
 
                 for (const auto& entry : locationSettings.playlist)
                 {
+                    if (isSupportedVideoUrl(entry))
+                    {
+                        validatedLocationPlaylist.emplace_back(entry);
+                        continue;
+                    }
+
                     const std::filesystem::path entryPath{entry};
                     std::error_code entryError;
 
@@ -2596,10 +2605,12 @@ namespace f4ffmpeg
                     ? playbackSettings.playlist.front()
                     : std::string{};
 
-                if (hasGlobalPlayback && !isSupportedVideoPath(
-                        std::filesystem::path{
-                            initialVideoPath
-                        }))
+                if (hasGlobalPlayback &&
+                    !(isSupportedVideoUrl(initialVideoPath) ||
+                      isSupportedVideoPath(
+                          std::filesystem::path{
+                              initialVideoPath
+                          })))
                 {
                     REX::WARN(
                         "f4ffmpeg standalone playlist '{}' has unsupported first media item '{}'; ignoring playlist replacement.",
