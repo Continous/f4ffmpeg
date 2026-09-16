@@ -1940,15 +1940,22 @@ bool decoder::initializeVideoDecoder()
         // transitions.
         closeSource();
 
+        AVDictionary* options = nullptr;
+        av_dict_set(&options, "user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", 0);
+        av_dict_set(&options, "timeout", "10000000", 0);
+
         if (avformat_open_input(
                 &formatContext,
                 path,
                 nullptr,
-                nullptr) < 0)
+                &options) < 0)
         {
+            av_dict_free(&options);
             formatContext = nullptr;
             return false;
         }
+
+        av_dict_free(&options);
 
         if (avformat_find_stream_info(
                 formatContext,
