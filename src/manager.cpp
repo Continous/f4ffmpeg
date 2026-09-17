@@ -72,24 +72,29 @@ bool manager::start(
         playbackSettings.looping,
         std::memory_order_release
     );
-
     playbackSources.clear();
-    playbackSources.emplace_back(this->inputPath);
 
-    for (auto& entry : playbackSettings.playlist)
+    if (playbackSettings.playlist.empty())
     {
-        if (
-            entry.empty() ||
-            std::find(
-                playbackSources.begin(),
-                playbackSources.end(),
-                entry
-            ) != playbackSources.end())
+        playbackSources.emplace_back(this->inputPath);
+    }
+    else
+    {
+        for (auto& entry : playbackSettings.playlist)
         {
-            continue;
-        }
+            if (
+                entry.empty() ||
+                std::find(
+                    playbackSources.begin(),
+                    playbackSources.end(),
+                    entry
+                ) != playbackSources.end())
+            {
+                continue;
+            }
 
-        playbackSources.emplace_back(entry);
+            playbackSources.emplace_back(entry);
+        }
     }
 
     currentSourceIndex = 0;
