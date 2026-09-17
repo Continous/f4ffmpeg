@@ -2010,10 +2010,9 @@ bool decoder::initializeVideoDecoder()
             -> bool
         {
             AVDictionary* options = nullptr;
-            av_dict_set(&options, "user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36", 0);
-            av_dict_set(&options, "timeout", "90000000", 0);  // 90 seconds // Increased from 10s to handle manifest fetch delays
-            av_dict_set(&options, "referer", "https://www.youtube.com/watch?v=?", 0);  // required for gvs signed URLs
-            av_dict_set(&options, "no_http_range_requests", "1", 0);  // Google rejects Range requests on manifest endpoint
+                        av_dict_set(&options, "user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36", 0);
+            av_dict_set(&options, "referer", "https://www.youtube.com/watch?v=?", 0);  // required by Google gvs signed URLs
+            av_dict_set(&options, "http2", "1", 0);  // GVS manifest endpoint REQUIRES HTTP/2
 
             if (avformat_open_input(
                     &formatContext,
