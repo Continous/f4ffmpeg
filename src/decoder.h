@@ -91,7 +91,7 @@ namespace f4ffmpeg
     public:
         ~decoder();
 
-        bool open(const char* path);
+        bool open(const std::string& path);
         void close();
 
         std::shared_ptr<producedFrame>

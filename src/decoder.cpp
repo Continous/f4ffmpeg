@@ -1992,7 +1992,7 @@ bool decoder::initializeVideoDecoder()
             return true;
         }
 
-        bool decoder::open(const char* path)
+        bool decoder::open(const std::string& path)
     {
         if (path == nullptr)
         {
