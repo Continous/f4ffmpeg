@@ -2735,11 +2735,32 @@ namespace f4ffmpeg
             }
 
             std::string videoPath = replacement->second.videoPath;
-            if ((replacement->second.standalonePlaylist ||
-                 !replacement->second.hasGlobalPlayback) &&
-                !locationSettings.settings.playlist.empty())
+            std::string_view useLocationPlaylist =
+                replacement->second.standalonePlaylist;
+
+            if (!useLocationPlaylist)
             {
-                videoPath = locationSettings.settings.playlist.front();
+                // Not a standalone playlist; use location-scoped playlist
+                if (!locationSettings.settings.playlist.empty())
+                {
+                    useLocationPlaylist = true;
+                }
+            }
+
+            if (useLocationPlaylist)
+            {
+                videoPath = std::string(locationSettings.settings.playlist.front());
+            }
+            else
+            {
+                // Use the INI's own playlist (global scope)
+                if (!replacement->second.playbackSettings.playlist.empty())
+                {
+                    videoPath =
+                        std::string(
+                            replacement->second.playbackSettings.playlist.front()
+                        );
+                }
             }
 
             std::string playbackKey = replacement->second.playbackKey;
