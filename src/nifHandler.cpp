@@ -2735,8 +2735,7 @@ namespace f4ffmpeg
             }
 
             std::string videoPath = replacement->second.videoPath;
-            std::string_view useLocationPlaylist =
-                replacement->second.standalonePlaylist;
+            bool useLocationPlaylist = replacement->second.standalonePlaylist;
 
             if (!useLocationPlaylist)
             {

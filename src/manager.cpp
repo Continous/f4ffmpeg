@@ -47,10 +47,10 @@ namespace
 }
 
 bool manager::start(
-    const char* inputPath,
+    const char* inputPathStr,
     videoPlaybackSettings settings)
 {
-    if (inputPath == nullptr)
+    if (inputPathStr == nullptr)
     {
         return false;
     }
@@ -65,7 +65,7 @@ bool manager::start(
         managerThread.join();
     }
 
-    this->inputPath = inputPath;
+    this->inputPath = inputPathStr;
     playbackSettings = std::move(settings);
 
     looping.store(
@@ -406,11 +406,11 @@ bool manager::transitionToSource(
         return false;
     }
 
-    inputPath = nextPath;
+    inputPathStr = nextPath;
 
     REX::TRACE(
         "Manager transitioned to '{}' without restarting the producer/presentation path (generation {}).",
-        inputPath,
+        inputPathStr,
         sourceGeneration
     );
 
@@ -578,7 +578,7 @@ void manager::run()
                     {
                         REX::ERROR(
                             "Manager failed playlist transition from '{}' to '{}'.",
-                            inputPath,
+                            inputPathStr,
                             nextPath
                         );
 
@@ -593,7 +593,7 @@ void manager::run()
                         "Manager playlist transition: {}/{} '{}' using {} decoder-gap fallback.",
                         currentSourceIndex + 1,
                         playbackSources.size(),
-                        inputPath,
+                        inputPathStr,
                         transitionMethodName(
                             activeTransitionMethod.load(
                                 std::memory_order_acquire
@@ -647,14 +647,14 @@ manager::~manager()
 }
 
 std::shared_ptr<manager> createManager(
-    const char* inputPath,
+    const char* inputPathStr,
     videoPlaybackSettings settings)
 {
     auto newManager =
         std::make_shared<manager>();
 
     if (!newManager->start(
-            inputPath,
+            inputPathStr,
             std::move(settings)))
     {
         return nullptr;
@@ -664,14 +664,14 @@ std::shared_ptr<manager> createManager(
 }
 
 std::shared_ptr<manager> createManager(
-    const char* inputPath,
+    const char* inputPathStr,
     bool looping)
 {
     videoPlaybackSettings settings{};
     settings.looping = looping;
 
     return createManager(
-        inputPath,
+        inputPathStr,
         std::move(settings)
     );
 }
