@@ -70,7 +70,8 @@ namespace f4ffmpeg
         decodeWorker decoderWorker;
         producerWorker producerWorker;
 
-        std::string inputPath;
+        std::string inputPath;  // original INI path (for error messages)
+        std::string inputPathStr;// resolved source path used for error messages
         videoPlaybackSettings playbackSettings;
 
         std::vector<std::string> playbackSources;

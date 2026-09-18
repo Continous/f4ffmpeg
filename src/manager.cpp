@@ -153,7 +153,7 @@ bool manager::start(
         transitionMethodName(resolveTransitionMethod())
     );
 
-    if (!decoderWorker.start(inputPath))
+    if (!decoderWorker.start(inputPathStr))
     {
         return false;
     }

@@ -19,7 +19,7 @@ namespace f4ffmpeg
 
         ~decodeWorker();
 
-        bool start(const char* path);
+        bool start(const std::string& path);
 
         // Rewind the already-open decoder in place. Unlike start(), this does
         // not reopen the input, recreate the codec context, or rebuild the

@@ -17,7 +17,7 @@ namespace f4ffmpeg
 {
 
 
-bool decodeWorker::start(const char* path)
+bool decodeWorker::start(const std::string& path)
 {
     REX::INFO("Decode worker has been called.");
     if (running)
