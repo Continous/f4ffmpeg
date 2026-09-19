@@ -1994,8 +1994,9 @@ bool decoder::initializeVideoDecoder()
 
         bool decoder::open(const std::string& path)
     {
-        if (path == nullptr)
+        if (path.empty())
         {
+            REX::ERROR("Decoder::open called with empty path.");
             return false;
         }
 
