@@ -2751,11 +2751,11 @@ namespace f4ffmpeg
             if (!locationSettings.settings.playlist.empty())
             {
                 videoPath = std::string(locationSettings.settings.playlist.front());
-                REX::TRACE("  -> using location playlist: '{}' {}",
+                REX::TRACE(
+                    "  -> using location playlist: '{}' {}",
                     videoPath,
-                    (locationSettings.locationKey.empty()
-                     ? "(no location key)"
-                     : std::string("location=" + locationSettings.locationKey));
+                    locationSettings.locationKey.empty() ? "(no location key)"
+                                                         : std::string("location=" + locationSettings.locationKey)
                 );
             }
             else if (!replacement->second.playbackSettings.playlist.empty())
