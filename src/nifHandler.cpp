@@ -2780,60 +2780,31 @@ namespace f4ffmpeg
                 return std::nullopt;
             }
 
-            // Select the source: 
-            //   - Global playlist preferred for standalone playlist INIs
-            //   - Location playlist only for sidecars or when explicitly overridden
-            std::string videoPath;
-
-            REX::TRACE(
-                "resolveVideoTarget: key='{}', hasGlobalPlayback={}, "
-                "locationPlaylist={}, globalPlaylist={}, overridePlaylist={}",
-                replacement->first,
-                replacement->second.hasGlobalPlayback,
-                locationSettings.settings.playlist.size(),
-                replacement->second.playbackSettings.playlist.size(),
-                locationSettings.overridePlaylist ? "true" : "false"
-            );
-
-            // Priority: global playlist > location playlist > fallback
-            bool useLocation = false;
-
-            if (replacement->second.standalonePlaylist == false &&
-                !locationSettings.settings.playlist.empty())
+            // KEY FIX: For standalone playlist INIs, the [Playlist] global playlist
+            // ALWAYS takes precedence. Location playlists from [Location.EditorID.Playlist]
+            // in a sidecar INI must NOT incorrectly affect unrelated standalone playlist INIs.
+            if (replacement->second.standalonePlaylist &&
+                !replacement->second.playbackSettings.playlist.empty())
             {
-                // Sidecar INI with location override: use location playlist
-                // This applies when the same-stem INI has location-specific media
-                useLocation = true;
-            }
-            else if (
-                !replacement->second.playbackSettings.playlist.empty() &&
-                !locationSettings.settings.playlist.empty() &&
-                locationSettings.overridePlaylist)
-            {
-                // Global playlist exists but location override is explicit
-                // (overridePlaylist=true means "replace global with location")
-                useLocation = true;
+                REX::TRACE(
+                    "  -> using global playlist: '{}' (standalone INI always uses own playlist)",
+                    replacement->second.playbackSettings.playlist.front()
+                );
+                videoPath =
+                    std::string(replacement->second.playbackSettings.playlist.front());
             }
             else if (!replacement->second.playbackSettings.playlist.empty())
             {
-                // Global playlist exists -> use it
-                // This is the case for standalone playlist INIs
+                // Sidecar INI with global playlist
                 videoPath =
-                    std::string(
-                        replacement->second.playbackSettings.playlist.front()
-                    );
-                REX::TRACE("  -> using global playlist: '{}'", videoPath);
+                    std::string(replacement->second.playbackSettings.playlist.front());
             }
-            // Fallback: no playlists available, use INI path
-
-            if (videoPath.empty())
+            else if (!locationSettings.settings.playlist.empty())
             {
-                REX::WARN(
-                    "resolveVideoTarget: no video path available for '{}'; will attempt default.",
-                    replacement->first
-                );
+                // No global, use location playlist as fallback
+                videoPath =
+                    std::string(locationSettings.settings.playlist.front());
             }
-
             std::string playbackKey = replacement->second.playbackKey;
             if (!locationSettings.locationKey.empty())
             {
