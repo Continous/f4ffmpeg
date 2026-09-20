@@ -2734,32 +2734,49 @@ namespace f4ffmpeg
                 return std::nullopt;
             }
 
-            std::string videoPath = replacement->second.videoPath;
-            bool useLocationPlaylist = replacement->second.standalonePlaylist;
+            // Select the source: location playlist > global playlist > fallback
+            std::string videoPath{replacement->second.videoPath};  // default: INI path
 
-            if (!useLocationPlaylist)
-            {
-                // Not a standalone playlist; use location-scoped playlist
-                if (!locationSettings.settings.playlist.empty())
-                {
-                    useLocationPlaylist = true;
-                }
-            }
+            REX::TRACE(
+                "resolveVideoTarget: key='{}', hasGlobalPlayback={}, "
+                "locationPlaylist={}, globalPlaylist={}, videoPath='{}'",
+                replacement->first,
+                replacement->second.hasGlobalPlayback,
+                locationSettings.settings.playlist.size(),
+                replacement->second.playbackSettings.playlist.size(),
+                videoPath
+            );
 
-            if (useLocationPlaylist)
+            // First: try location-scoped playlist (if available)
+            if (!locationSettings.settings.playlist.empty())
             {
                 videoPath = std::string(locationSettings.settings.playlist.front());
+                REX::TRACE("  -> using location playlist: '{}' {}",
+                    videoPath,
+                    (locationSettings.locationKey.empty()
+                     ? "(no location key)"
+                     : std::string("location=" + locationSettings.locationKey));
+                );
             }
-            else
+            else if (!replacement->second.playbackSettings.playlist.empty())
             {
-                // Use the INI's own playlist (global scope)
-                if (!replacement->second.playbackSettings.playlist.empty())
-                {
-                    videoPath =
-                        std::string(
-                            replacement->second.playbackSettings.playlist.front()
-                        );
-                }
+                // Fallback: use the INI's own global playlist
+                // This is the case for standalone playlist INIs
+                videoPath =
+                    std::string(
+                        replacement->second.playbackSettings.playlist.front()
+                    );
+                REX::TRACE("  -> using global playlist: '{}'", videoPath);
+            }
+            // If both are empty, videoPath stays as replacement->second.videoPath
+            // (which is the standalone INI path for standalone playlists)
+
+            if (videoPath.empty())
+            {
+                REX::WARN(
+                    "resolveVideoTarget: no video path available for '{}'; will attempt default.",
+                    replacement->first
+                );
             }
 
             std::string playbackKey = replacement->second.playbackKey;
