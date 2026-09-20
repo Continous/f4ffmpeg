@@ -984,6 +984,10 @@ namespace f4ffmpeg
                       key == "entry" ||
                       key == "file")))
                 {
+                    REX::TRACE(
+                        "  [INI {}] parsing INI playlist entry from line {}: item='{}'",
+                        iniPath.string(), lineNumber, value
+                    );
                     appendPlaylistEntry(
                         settings,
                         iniPath,
@@ -1334,6 +1338,13 @@ namespace f4ffmpeg
                         result.settings.transitionImage = locationSettings.transitionImage;
 
                     if (locationSettings.hasPlaylist)
+                    REX::TRACE(
+                        "  -> applying location setting '{}' playlist (override={} {}items), base has {}items",
+                        locationKey,
+                        locationSettings.overridePlaylist ? "true" : "false",
+                        locationSettings.playlist.size(),
+                        result.settings.playlist.size()
+                    );
                     {
                         if (locationSettings.overridePlaylist)
                             result.settings.playlist = locationSettings.playlist;
@@ -2734,33 +2745,43 @@ namespace f4ffmpeg
                 return std::nullopt;
             }
 
-            // Select the source: location playlist > global playlist > fallback
-            std::string videoPath{replacement->second.videoPath};  // default: INI path
+            // Select the source: 
+            //   - Global playlist preferred for standalone playlist INIs
+            //   - Location playlist only for sidecars or when explicitly overridden
+            std::string videoPath;
 
             REX::TRACE(
                 "resolveVideoTarget: key='{}', hasGlobalPlayback={}, "
-                "locationPlaylist={}, globalPlaylist={}, videoPath='{}'",
+                "locationPlaylist={}, globalPlaylist={}, overridePlaylist={}",
                 replacement->first,
                 replacement->second.hasGlobalPlayback,
                 locationSettings.settings.playlist.size(),
                 replacement->second.playbackSettings.playlist.size(),
-                videoPath
+                locationSettings.overridePlaylist ? "true" : "false"
             );
 
-            // First: try location-scoped playlist (if available)
-            if (!locationSettings.settings.playlist.empty())
+            // Priority: global playlist > location playlist > fallback
+            bool useLocation = false;
+
+            if (replacement->second.standalonePlaylist == false &&
+                !locationSettings.settings.playlist.empty())
             {
-                videoPath = std::string(locationSettings.settings.playlist.front());
-                REX::TRACE(
-                    "  -> using location playlist: '{}' {}",
-                    videoPath,
-                    locationSettings.locationKey.empty() ? "(no location key)"
-                                                         : std::string("location=" + locationSettings.locationKey)
-                );
+                // Sidecar INI with location override: use location playlist
+                // This applies when the same-stem INI has location-specific media
+                useLocation = true;
+            }
+            else if (
+                !replacement->second.playbackSettings.playlist.empty() &&
+                !locationSettings.settings.playlist.empty() &&
+                locationSettings.overridePlaylist)
+            {
+                // Global playlist exists but location override is explicit
+                // (overridePlaylist=true means "replace global with location")
+                useLocation = true;
             }
             else if (!replacement->second.playbackSettings.playlist.empty())
             {
-                // Fallback: use the INI's own global playlist
+                // Global playlist exists -> use it
                 // This is the case for standalone playlist INIs
                 videoPath =
                     std::string(
@@ -2768,8 +2789,7 @@ namespace f4ffmpeg
                     );
                 REX::TRACE("  -> using global playlist: '{}'", videoPath);
             }
-            // If both are empty, videoPath stays as replacement->second.videoPath
-            // (which is the standalone INI path for standalone playlists)
+            // Fallback: no playlists available, use INI path
 
             if (videoPath.empty())
             {
