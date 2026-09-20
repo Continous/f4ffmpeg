@@ -2631,6 +2631,11 @@ namespace f4ffmpeg
                 // For standalone playlist INIs, the global playlist ALWAYS wins.
                 // Sidecar INIs only use their playlist as a default fallback;
                 // the VIDEO's playlist (if any) is authoritative.
+                // For a standalone playlist INI (no sibling video):
+                // playbackSettings.playlist holds the INI's [Playlist] entries.
+                // For a sidecar INI (has sibling video), playbackSettings.playlist
+                // holds the INI's entries. The VIDEO's own playlist (if any) is
+                // stored in replacement.videoPath.
                 const std::string initialVideoPath = hasGlobalPlayback
                     ? playbackSettings.playlist.front()
                     : std::string{};
