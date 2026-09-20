@@ -1299,6 +1299,7 @@ namespace f4ffmpeg
         {
             videoPlaybackSettings settings;
             std::string locationKey;
+            bool overridePlaylist = false;  // whether location playlist replaces global
         };
 
         resolvedLocationPlaybackSettings resolveLocationPlaybackSettings(
@@ -1338,24 +1339,39 @@ namespace f4ffmpeg
                         result.settings.transitionImage = locationSettings.transitionImage;
 
                     if (locationSettings.hasPlaylist)
-                    REX::TRACE(
-                        "  -> applying location setting '{}' playlist (override={} {}items), base has {}items",
-                        locationKey,
-                        locationSettings.overridePlaylist ? "true" : "false",
-                        locationSettings.playlist.size(),
-                        result.settings.playlist.size()
-                    );
                     {
                         if (locationSettings.overridePlaylist)
-                            result.settings.playlist = locationSettings.playlist;
-                        else
+                        {
+                            REX::TRACE(
+                                "[LOCATION OVERRIDED] "{}" playlist {}items -> {} "
+                                "items (override=true: replaces)",
+                                locationKey,
+                                locationSettings.playlist.size(),
+                                result.settings.playlist.size()
+                            );
+                            result.settings.playlist.clear();
+                            result.settings.playlist.insert(
+                                result.settings.playlist.begin(),
+                                locationSettings.playlist.begin(),
+                                locationSettings.playlist.end()
+                            );
+                        }
+                        else if (!locationSettings.playlist.empty())
+                        {
+                            REX::TRACE(
+                                "[LOCATION MERGED] "{}" playlist {}items >> base {} items",
+                                locationKey,
+                                locationSettings.playlist.size(),
+                                result.settings.playlist.size()
+                            );
                             result.settings.playlist.insert(
                                 result.settings.playlist.end(),
                                 locationSettings.playlist.begin(),
                                 locationSettings.playlist.end()
                             );
+                        }
                     }
-
+                    result.overridePlaylist = locationSettings.overridePlaylist;
                     result.locationKey = locationKey;
                     return true;
                 };
@@ -2612,6 +2628,9 @@ namespace f4ffmpeg
                 if (!relativeStem)
                     continue;
 
+                // For standalone playlist INIs, the global playlist ALWAYS wins.
+                // Sidecar INIs only use their playlist as a default fallback;
+                // the VIDEO's playlist (if any) is authoritative.
                 const std::string initialVideoPath = hasGlobalPlayback
                     ? playbackSettings.playlist.front()
                     : std::string{};
@@ -2643,6 +2662,17 @@ namespace f4ffmpeg
 
                 ++activePlaylists;
 
+                REX::TRACE(
+                    "  f4ffmpeg INDEXING standalone INI '{}' (stem='{}', "
+                    "global={} items, location={} items, hasGlobalPlayback={}, "
+                    "standalonePlaylist={} {})",
+                    iniPath.string(), *relativeStem,
+                    playbackSettings.playlist.size(),
+                    playbackSettings.locationOverrides.size(),
+                    (hasLocationPlayback ? "true" : "false"),
+                    hasGlobalPlayback,
+                    replacement.standalonePlaylist
+                );
                 REX::INFO(
                     "f4ffmpeg indexed standalone playlist '{}' for texture stem '{}' with global playback={}, location playback={}.",
                     iniPath.string(),
