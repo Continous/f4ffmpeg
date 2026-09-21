@@ -1323,19 +1323,20 @@ namespace f4ffmpeg
 
                     const auto& locationSettings = *overrideIt;
                     if (locationSettings.looping)
-                    if (locationSettings.looping)
                     {
-                        result.settings.looping = locationSettings.looping.value_or(false);
-                        else
-                            REX::ERROR("Invalid Loop value '{}' in [Location.%s]: expected 0|1|true|false|yes|no|on|off",
-                                           locationSettings.looping.value_or("false"), locId);
+                        result.settings.looping = locationSettings.looping.value();
+                    }
+                    else
+                    {
+                        REX::ERROR("Invalid Loop value: %s", locationSettings.looping.value_or(false));
                     }
                     if (locationSettings.shuffle)
                     {
-                        result.settings.shuffle = locationSettings.shuffle.value_or(false);
-                        else
-                            REX::ERROR("Invalid Shuffle value in [Location.%s]: '%s'",
-                                           locId, locationSettings.shuffle.value_or("false"));
+                        result.settings.shuffle = locationSettings.shuffle.value();
+                    }
+                    else
+                    {
+                        REX::ERROR("Invalid Shuffle value: %s", locationSettings.shuffle.value_or(false));
                     }
                     if (locationSettings.transition)
                     {
@@ -1349,7 +1350,9 @@ namespace f4ffmpeg
                     if (locationSettings.transitionImage)
                     {
                         videoPlaybackSettings temp;
-                        setPlaylistTransitionImage(temp, iniPath, locationSettings.transitionImage.value_or(""), 0);
+                        setPlaylistTransitionImage(temp, iniPath,
+                                                   locationSettings.transitionImage.value_or(""),
+                                                   0);
                         result.settings.transitionImage = temp.transitionImage;
                     }
                     if (locationSettings.hasPlaylist)
