@@ -1325,18 +1325,14 @@ namespace f4ffmpeg
                     if (locationSettings.looping)
                     if (locationSettings.looping)
                     {
-                        const auto parsed = parseIniBool(locationSettings.looping.value_or("false"));
-                        if (parsed)
-                            result.settings.looping = *parsed;
+                        result.settings.looping = locationSettings.looping.value_or(false);
                         else
                             REX::ERROR("Invalid Loop value '{}' in [Location.%s]: expected 0|1|true|false|yes|no|on|off",
                                            locationSettings.looping.value_or("false"), locId);
                     }
                     if (locationSettings.shuffle)
                     {
-                        const auto parsed = parseIniBool(locationSettings.shuffle.value_or("false"));
-                        if (parsed)
-                            result.settings.shuffle = *parsed;
+                        result.settings.shuffle = locationSettings.shuffle.value_or(false);
                         else
                             REX::ERROR("Invalid Shuffle value in [Location.%s]: '%s'",
                                            locId, locationSettings.shuffle.value_or("false"));
