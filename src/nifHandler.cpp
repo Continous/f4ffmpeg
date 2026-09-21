@@ -534,7 +534,7 @@ namespace f4ffmpeg
             if (isSupportedVideoUrl(entry))
             {
                 settings.playlist.emplace_back(entry);
-                REX::LOG_DEBUG("URL deferred: %s", entry);
+                REX::DEBUG("URL deferred: %s", entry);
                 return;
             }
 
@@ -981,7 +981,7 @@ namespace f4ffmpeg
                       key == "entry" ||
                       key == "file")))
                 {
-                    REX::LOG_DEBUG(
+                    REX::DEBUG(
                         "  [INI %s line %d]: parsing INI item "%s"",
                         iniPath.string().c_str(), lineNumber, value.c_str()
                     );
@@ -1333,7 +1333,7 @@ namespace f4ffmpeg
                         if (parsed)
                             result.settings.looping = *parsed;
                         else
-                            REX::LOG_ERROR("Invalid Loop value '{}' in [Location.%s]: expected 0|1|true|false|yes|no|on|off",
+                            REX::ERROR("Invalid Loop value '{}' in [Location.%s]: expected 0|1|true|false|yes|no|on|off",
                                            locationSettings.looping.value_or("false"), locId);
                     }
                     if (locationSettings.shuffle)
@@ -1342,7 +1342,7 @@ namespace f4ffmpeg
                         if (parsed)
                             result.settings.shuffle = *parsed;
                         else
-                            REX::LOG_ERROR("Invalid Shuffle value in [Location.%s]: '%s'",
+                            REX::ERROR("Invalid Shuffle value in [Location.%s]: '%s'",
                                            locId, locationSettings.shuffle.value_or("false"));
                     }
                     if (locationSettings.transition)
@@ -1351,7 +1351,7 @@ namespace f4ffmpeg
                         if (parsed)
                             result.settings.transition = *parsed;
                         else
-                            REX::LOG_ERROR("Invalid Transition in [Location.%s]: '%s'",
+                            REX::ERROR("Invalid Transition in [Location.%s]: '%s'",
                                            locId, locationSettings.transition.value_or(""));
                     }
                     if (locationSettings.transitionImage)
@@ -1364,17 +1364,17 @@ namespace f4ffmpeg
                     {
                         const int playlistSize = (int)locationSettings.playlist.size();
                         const int override = locationSettings.overridePlaylist ? 1 : 0;
-                        REX::LOG_DEBUG("  [Location.%s] playlist: %d items (override=%d)",
+                        REX::DEBUG("  [Location.%s] playlist: %d items (override=%d)",
                                        locId, playlistSize, override);
 
                         if (locationSettings.overridePlaylist)
                         {
-                            REX::LOG_DEBUG("  [REPLACE] %d playlist items", playlistSize);
+                            REX::DEBUG("  [REPLACE] %d playlist items", playlistSize);
                             result.settings.playlist = locationSettings.playlist;
                         }
                         else if (!locationSettings.playlist.empty())
                         {
-                            REX::LOG_DEBUG("  [MERGE] appending %d playlist items", playlistSize);
+                            REX::DEBUG("  [MERGE] appending %d playlist items", playlistSize);
                             result.settings.playlist.insert(result.settings.playlist.end(),
                                                        locationSettings.playlist.begin(),
                                                        locationSettings.playlist.end());
@@ -2675,7 +2675,7 @@ namespace f4ffmpeg
 
                 ++activePlaylists;
 
-                REX::LOG_DEBUG(
+                REX::DEBUG(
                     "  f4ffmpeg INDEXING standalone INI '%s' (stem='%s', "
                     "global=%d items, location=%d items, hasGlobalPlayback=%s, "
                     "standalonePlaylist=%s %s)",
@@ -2794,7 +2794,7 @@ namespace f4ffmpeg
             if (replacement->second.standalonePlaylist &&
                 !replacement->second.playbackSettings.playlist.empty())
             {
-                REX::LOG_DEBUG("  -> using global playlist: %s (standalone INI always uses its own playlist)",
+                REX::DEBUG("  -> using global playlist: %s (standalone INI always uses its own playlist)",
                              replacement->second.playbackSettings.playlist.front().c_str());
                 videoPath =
                     std::string(replacement->second.playbackSettings.playlist.front());
@@ -4745,7 +4745,7 @@ namespace f4ffmpeg
 
                     shaderProperty->DoClearRenderPasses();
 
-                    REX::LOG_DEBUG(
+                    REX::DEBUG(
                         "f4ffmpeg target-local workshop-TV %s property=%p blocked render-pass after nulling base-texture",
                         workshopTvEffectKindName(effectKind).c_str(),
                         static_cast<void*>(shaderProperty)
