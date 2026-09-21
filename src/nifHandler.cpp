@@ -981,10 +981,6 @@ namespace f4ffmpeg
                       key == "entry" ||
                       key == "file")))
                 {
-                    REX::DEBUG(
-                        "  [INI %s line %d]: parsing INI item "%s"",
-                        iniPath.string().c_str(), lineNumber, value.c_str()
-                    );
                     appendPlaylistEntry(
                         settings,
                         iniPath,
