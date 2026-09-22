@@ -1322,62 +1322,69 @@ namespace f4ffmpeg
                         return false;
 
                     const auto& locationSettings = *overrideIt;
+                    
                     if (locationSettings.looping)
                     {
                         result.settings.looping = locationSettings.looping.value();
                     }
                     else
                     {
-                        REX::ERROR("Invalid Loop value: %s", locationSettings.looping.value_or(false));
+                        REX::ERROR("Invalid Loop value: {}", locationSettings.looping.value_or(false));
                     }
+                    
                     if (locationSettings.shuffle)
                     {
                         result.settings.shuffle = locationSettings.shuffle.value();
                     }
                     else
                     {
-                        REX::ERROR("Invalid Shuffle value: %s", locationSettings.shuffle.value_or(false));
+                        REX::ERROR("Invalid Shuffle value: {}", locationSettings.shuffle.value_or(false));
                     }
+                    
                     if (locationSettings.transition)
                     {
-                        const auto parsed = parseTransitionMethod(locationSettings.transition.value_or(""), false, 0);
-                        if (parsed)
-                            result.settings.transition = *parsed;
-                        else
-                            REX::ERROR("Invalid Transition in [Location.%s]: '%s'",
-                                           locId, locationSettings.transition.value_or(""));
+                        result.settings.transition = locationSettings.transition.value();
                     }
+                    else if (locationSettings.transition.has_value())
+                    {
+                        REX::ERROR("Invalid Transition: {}", locationSettings.transition.value_or(""));
+                    }
+                    
                     if (locationSettings.transitionImage)
                     {
                         videoPlaybackSettings temp;
                         setPlaylistTransitionImage(temp, iniPath,
-                                                   locationSettings.transitionImage.value_or(""),
-                                                   0);
+                                                   locationSettings.transitionImage.value_or(""), 0);
                         result.settings.transitionImage = temp.transitionImage;
                     }
+                    
                     if (locationSettings.hasPlaylist)
                     {
-                        const int playlistSize = (int)locationSettings.playlist.size();
-                        const int override = locationSettings.overridePlaylist ? 1 : 0;
-                        REX::DEBUG("  [Location.%s] playlist: %d items (override=%d)",
-                                       locId, playlistSize, override);
-
+                        const size_t n = locationSettings.playlist.size();
+                        const std::string editorName = locId;
                         if (locationSettings.overridePlaylist)
                         {
-                            REX::DEBUG("  [REPLACE] %d playlist items", playlistSize);
-                            result.settings.playlist = locationSettings.playlist;
+                            REX::DEBUG("  [Location.{}] [OVERRIDE] {} playlist item(s)",
+                                           editorName.c_str(), n);
+                            result.settings.playlist.clear();
+                            result.settings.playlist.insert(
+                                result.settings.playlist.end(),
+                                locationSettings.playlist.begin(),
+                                locationSettings.playlist.end());
                         }
                         else if (!locationSettings.playlist.empty())
                         {
-                            REX::DEBUG("  [MERGE] appending %d playlist items", playlistSize);
-                            result.settings.playlist.insert(result.settings.playlist.end(),
-                                                       locationSettings.playlist.begin(),
-                                                       locationSettings.playlist.end());
+                            REX::DEBUG("  [Location.{}] [MERGE] +{} playlist item(s)",
+                                           editorName.c_str(), n);
+                            result.settings.playlist.insert(
+                                result.settings.playlist.end(),
+                                locationSettings.playlist.begin(),
+                                locationSettings.playlist.end());
                         }
                     }
+                    
                     result.locationKey = locId;
                     return true;
-                };
 
             auto* player = RE::PlayerCharacter::GetSingleton();
             if (player == nullptr)
