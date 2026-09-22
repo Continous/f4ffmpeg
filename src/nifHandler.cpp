@@ -1352,16 +1352,14 @@ namespace f4ffmpeg
                     
                     if (locationSettings.transitionImage)
                     {
-                        videoPlaybackSettings temp;
-                        setPlaylistTransitionImage(temp, iniPath,
-                                                   locationSettings.transitionImage.value_or(""), 0);
-                        result.settings.transitionImage = temp.transitionImage;
+                        result.settings.transitionImage =
+                            *locationSettings.transitionImage;
                     }
                     
                     if (locationSettings.hasPlaylist)
                     {
                         const size_t n = locationSettings.playlist.size();
-                        const std::string editorName = locId;
+                        const std::string editorName = editorId;
                         if (locationSettings.overridePlaylist)
                         {
                             REX::DEBUG("  [Location.{}] [OVERRIDE] {} playlist item(s)",
@@ -1383,8 +1381,9 @@ namespace f4ffmpeg
                         }
                     }
                     
-                    result.locationKey = locId;
+                    result.locationKey = locationKey;
                     return true;
+                };
 
             auto* player = RE::PlayerCharacter::GetSingleton();
             if (player == nullptr)
@@ -2678,15 +2677,13 @@ namespace f4ffmpeg
                 ++activePlaylists;
 
                 REX::DEBUG(
-                    "  f4ffmpeg INDEXING standalone INI '%s' (stem='%s', "
-                    "global=%d items, location=%d items, hasGlobalPlayback=%s, "
-                    "standalonePlaylist=%s %s)",
-                    iniPath.string().c_str(), relativeStem->c_str(),
-                    (int)playbackSettings.playlist.size(),
-                    (int)playbackSettings.locationOverrides.size(),
+                    "  f4ffmpeg INDEXING standalone INI '{}' (stem='{}', "
+                    "global={} items, location={} items, hasGlobalPlayback={})",
+                    iniPath.string(), *relativeStem,
+                    playbackSettings.playlist.size(),
+                    playbackSettings.locationOverrides.size(),
                     hasLocationPlayback ? "true" : "false",
-                    hasGlobalPlayback ? "true" : "false",
-                    replacement.standalonePlaylist ? "yes" : "no"
+                    hasGlobalPlayback ? "true" : "false"
                 );
                 REX::INFO(
                     "f4ffmpeg indexed standalone playlist '{}' for texture stem '{}' with global playback={}, location playback={}.",
@@ -2793,11 +2790,12 @@ namespace f4ffmpeg
             // KEY FIX: For standalone playlist INIs, the [Playlist] global playlist
             // ALWAYS takes precedence. Location playlists from [Location.EditorID.Playlist]
             // in a sidecar INI must NOT incorrectly affect unrelated standalone playlist INIs.
+            std::string videoPath;
             if (replacement->second.standalonePlaylist &&
                 !replacement->second.playbackSettings.playlist.empty())
             {
-                REX::DEBUG("  -> using global playlist: %s (standalone INI always uses its own playlist)",
-                             replacement->second.playbackSettings.playlist.front().c_str());
+                REX::DEBUG("  -> using global playlist: {} (standalone INI always uses its own playlist)",
+                             replacement->second.playbackSettings.playlist.front());
                 videoPath =
                     std::string(replacement->second.playbackSettings.playlist.front());
             }
