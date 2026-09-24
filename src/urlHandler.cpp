@@ -102,7 +102,7 @@ namespace f4ffmpeg
 
         if (found != 0u)
 
-            REX::TRACE("yt-dlp found. {}", searchBuffer)
+            REX::TRACE("yt-dlp found. {}", searchBuffer);
 
             return searchBuffer;
 
@@ -179,7 +179,7 @@ namespace f4ffmpeg
     )
     {
 
-        REX::TRACE("Spawning yt-dlp...")
+        REX::TRACE("Spawning yt-dlp...");
 
         std::string command =
             QuoteArg(exePath) + " --get-url";
