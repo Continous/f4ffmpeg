@@ -153,7 +153,9 @@ bool manager::start(
         transitionMethodName(resolveTransitionMethod())
     );
 
-    if (!decoderWorker.start(inputPathStr))
+    if (
+        playbackSources.empty() ||
+        !decoderWorker.start(playbackSources[0].c_str()))
     {
         return false;
     }

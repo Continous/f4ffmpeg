@@ -101,33 +101,12 @@ namespace f4ffmpeg
             );
 
         if (found != 0u)
+
+            REX::TRACE("yt-dlp found. {}", searchBuffer)
+
             return searchBuffer;
 
         return {};
-    }
-
-    // Truncates process output for a diagnostic error message so a chatty
-    // yt-dlp run does not flood the log, while still preserving the
-    // human-readable reason it failed.
-    static std::string
-    truncateForLog(std::string_view text, std::size_t maxLen = 2000)
-    {
-        std::string value(text);
-
-        // Strip a trailing newline so the message ends cleanly.
-        while (
-            !value.empty() &&
-            (value.back() == '\n' || value.back() == '\r'))
-        {
-            value.pop_back();
-        }
-
-        value = value.substr(0, maxLen);
-
-        if (value.empty())
-            value = "(no output)";
-
-        return value;
     }
 
     static HANDLE
@@ -196,10 +175,12 @@ namespace f4ffmpeg
         const std::string& ytDlpFlags,
         std::chrono::seconds timeout,
         std::string& stdoutOut,
-        std::string& stderrOut,
-        DWORD& exitCodeOut
+        std::string& stderrOut
     )
     {
+
+        REX::TRACE("Spawning yt-dlp...")
+
         std::string command =
             QuoteArg(exePath) + " --get-url";
 
@@ -337,8 +318,6 @@ namespace f4ffmpeg
 
         if (timedOut)
         {
-            // Force-killed; there is no meaningful exit code.
-            exitCodeOut = 1u;
             REX::WARN(
                 "urlHandler - yt-dlp timed out after {}s and will be terminated",
                 timeout.count()
@@ -374,8 +353,6 @@ namespace f4ffmpeg
         }
         else
         {
-            exitCodeOut = exitCode;
-
             REX::DEBUG(
                 "urlHandler - yt-dlp exited with code {}",
                 exitCode
@@ -403,11 +380,8 @@ namespace f4ffmpeg
 
         if (exePath.empty())
         {
-            REX::ERROR(
-                "urlHandler - could not locate yt-dlp.exe. Set "
-                "Streaming.YtDlpPath to the yt-dlp.exe location or place it "
-                "on PATH / next to Fallout4.exe. This is required for "
-                "streaming YouTube sources."
+            REX::WARN(
+                "urlHandler - could not locate yt-dlp.exe"
             );
 
             return std::nullopt;
@@ -415,8 +389,6 @@ namespace f4ffmpeg
 
         std::string stdoutOut;
         std::string stderrOut;
-
-        DWORD exitCode = 0;
 
         if (!spawnYtDlp(
                 exePath,
@@ -426,8 +398,7 @@ namespace f4ffmpeg
                 config::ytDlpFlags.GetValue(),
                 timeout,
                 stdoutOut,
-                stderrOut,
-                exitCode))
+                stderrOut))
         {
             return std::nullopt;
         }
@@ -450,59 +421,17 @@ namespace f4ffmpeg
 
         if (begin == std::string::npos)
         {
-            // yt-dlp produced no usable media URL. This is the single most
-            // common cause of "Format lrc detected" / "uninitialized Video
-            // Decoder" errors further down the pipeline, so the reason it
-            // failed must be surfaced clearly and cannot be left at DEBUG.
-            const bool botBlocked =
-                stderrOut.find("Sign in to confirm you're not a bot") !=
-                    std::string::npos ||
-                stderrOut.find("Sign in to confirm your age") !=
-                    std::string::npos ||
-                stderrOut.find("This video is unavailable") !=
-                    std::string::npos;
-
-            const bool noJsRuntime =
-                stderrOut.find("deno") != std::string::npos ||
-                stderrOut.find("js-runtime") != std::string::npos;
-
-            if (botBlocked)
+            if (stderrOut.find("not recognized") != std::string::npos)
             {
-                REX::ERROR(
-                    "urlHandler - YouTube rejected the request for '{}' "
-                    "(bot/age-check protection). Playback will not start. "
-                    "Try providing cookies via Streaming.CookieSource / "
-                    "Streaming.CookieValue, or a different YtDlpFlags.",
-                    url
-                );
-            }
-            else if (noJsRuntime)
-            {
-                REX::ERROR(
-                    "urlHandler - yt-dlp could not resolve '{}' because it "
-                    "needs a JS runtime (deno). Install deno on PATH or "
-                    "configure Streaming.YtDlpFlags with a working "
-                    "--js-runtimes value.",
-                    url
-                );
-            }
-            else if (stderrOut.find("not recognized") != std::string::npos)
-            {
-                REX::ERROR(
-                    "urlHandler - yt-dlp is not found or is not a valid "
-                    "executable on PATH for '{}'. Set Streaming.YtDlpPath to "
-                    "the yt-dlp.exe location.",
-                    url
+                REX::WARN(
+                    "urlHandler - yt-dlp not found/valid on PATH"
                 );
             }
             else
             {
-                REX::ERROR(
-                    "urlHandler - yt-dlp failed to resolve '{}' "
-                    "(exit code {}): {}",
-                    url,
-                    exitCode,
-                    truncateForLog(stderrOut)
+                REX::DEBUG(
+                    "urlHandler - yt-dlp returned no direct URL for '{}'",
+                    url
                 );
             }
 
