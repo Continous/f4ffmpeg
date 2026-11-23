@@ -7,6 +7,13 @@ This is a simple plugin intended to provide FFMPEG.
 * C++23 Compiler (MSVC or Clang-CL)
 * Presumably whatever FFMPEG requires.
 
+## Where to Download
+
+F4FFMPEG is made officially available on NexusMods and ModHub. The official account for NexusMods is Continous and for ModHub Sagacity. Below are the links for each:
+
+https://www.nexusmods.com/fallout4/mods/108412
+ModHold Link Pending
+
 ## Credit
 
 This is based on the CommonLibF4 Plugin Template, so thanks to the Dear Fallout 4 community and everyone else who made commonlib possible.
